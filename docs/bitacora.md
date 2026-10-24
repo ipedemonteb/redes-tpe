@@ -6,7 +6,7 @@ Registro de avances del TP. Cada entrada dice **qué hicimos**, **por qué**, **
 | :-- | :-- |
 | 0. Conceptos base | 📖 lectura |
 | 1. Levantar el entorno | ✅ |
-| 2. Atacar la tienda sin WAF | ⏳ |
+| 2. Atacar la tienda sin WAF | ✅ |
 | 3. Crear el endpoint vulnerable | ⏳ |
 | 4. Meter el WAF en el medio | ⏳ |
 | 5. Modos, logs e IP real | ⏳ |
@@ -136,3 +136,28 @@ Y los headers que el Ingress le agrega a la request antes de pasársela a la UI 
 
 #### Cierre del paso 1
 Fase 1 completada: el clúster está levantado y la tienda funciona en `http://localhost`.
+
+---
+
+## 2026-10-24 — Paso 2: atacar la tienda sin WAF
+
+**Qué hicimos.** Scripts en `scripts/attacks/` (uno por sección 3.x + `run-all.sh`) que corren los ataques de la pre-entrega e imprimen todo por terminal. No guardan nada en `docs/`.
+
+**Resultado:** todos los ataques pasan sin filtro (es el "antes" de la demo). Revisamos que cada caso demuestre de verdad la vulnerabilidad, y en el camino aparecieron diferencias con la pre-entrega que hay que tener presentes:
+
+- **IDOR de carritos (3.1):** el script primero carga un ítem en el carrito de `victima-123` por el flujo normal y después lo lee por `/proxy/carts/victima-123`. Así se ve el contenido ajeno, no un carrito vacío.
+- **`/proxy/orders` (3.1):** responde 200 desde afuera (la vulnerabilidad es la exposición del Service interno). Está vacío porque no hay órdenes; cargar una requiere datos de pago, así que no lo automatizamos.
+- **`health/down` (3.1):** marca `/actuator/health` como DOWN (503), **pero el grupo readiness sigue UP**, así que Kubernetes no saca el pod y la UI sigue atendiendo. Degrada el reporte de salud, no el servicio. El plan lo daba como "deja la UI caída"; no es así.
+- **`panic` (3.1):** sí apaga el pod; Kubernetes lo reinicia (sube el contador de RESTARTS). DoS real aunque transitorio.
+- **Query params (3.2):** Catalog no es explotable (consulta parametrizada; el `tag` se refleja escapado). El payload igual llega sin filtro → el WAF acá es defensa en profundidad. Lo dejamos dicho con honestidad.
+- **Checkout XSS (3.3):** dos correcciones respecto de la pre-entrega:
+  1. el campo del formulario es **`streetAddress`**, no `address1`;
+  2. el `POST /checkout` necesita que la sesión tenga carrito **y** que se haya hecho un `GET /checkout` antes; si no, da 500 sin procesar. Con eso preparado, responde 200 y el `<script>` queda **guardado sin escapar** (se ve en `/proxy/checkout/<sid>`): XSS almacenado confirmado.
+- **Cookie (3.4):** la app acepta `SESSIONID=victima-123` tal cual (no hay `Set-Cookie`); sin cookie, asigna un UUID. Prueba limpia de que no valida el formato.
+- **`/catalog/products` (3.3 y 3.5):** da 405 en los 4 casos porque el endpoint todavía no existe. Se crea en el paso 3 y ahí completamos esa evidencia.
+
+**Verificación.** `run-all.sh` corre de punta a punta y los casos clave quedan demostrados: IDOR muestra el carrito ajeno, el checkout responde 200 con el `<script>` almacenado sin escapar, `health/down` degrada el reporte (readiness UP) y `panic` reinicia el pod. Los 405 de `/catalog/products` quedan a la espera del paso 3.
+
+> Detalle cosmético: correr el script varias veces acumula ítems repetidos en los carritos de prueba y suma un reinicio por el `panic`. No afecta la demostración; se puede dejar idempotente más adelante.
+
+> Pendiente para el documento final: corregir en la pre-entrega `address1` → `streetAddress` y suavizar el claim de `health/down`.
