@@ -5,7 +5,7 @@ Registro de avances del TP. Cada entrada dice **qué hicimos**, **por qué**, **
 | Paso | Estado |
 | :-- | :-- |
 | 0. Conceptos base | 📖 lectura |
-| 1. Levantar el entorno | ✅ (falta corregir el diagrama) |
+| 1. Levantar el entorno | ✅ |
 | 2. Atacar la tienda sin WAF | ⏳ |
 | 3. Crear el endpoint vulnerable | ⏳ |
 | 4. Meter el WAF en el medio | ⏳ |
@@ -134,6 +134,5 @@ Y los headers que el Ingress le agrega a la request antes de pasársela a la UI 
 - En el **paso 6** la allowlist es `10.244.0.0/16,127.0.0.1`. Como desde afuera somos `172.18.0.1`, quedamos **fuera** de la allowlist → 403, que es lo que queremos.
 - Limitación para mencionar: en esta POC todos los clientes externos se ven con la misma IP, así que no se podría, por ejemplo, bloquear a un atacante puntual por IP.
 
-#### Pendiente del paso 1
-- [ ] Recorrer la tienda en el navegador (catálogo → carrito → checkout) para conocer el flujo normal.
-- [ ] Corregir el diagrama con los datos de arriba.
+#### Cierre del paso 1
+Fase 1 completada: el clúster está levantado y la tienda funciona en `http://localhost`.
