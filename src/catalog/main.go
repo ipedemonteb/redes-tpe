@@ -108,6 +108,7 @@ func main() {
 	catalog.Use(otelgin.Middleware("catalog-server"))
 
 	catalog.GET("/products", c.GetProducts)
+	catalog.POST("/products", c.CreateProduct) // POC WAF: endpoint vulnerable a SQLi/XSS
 
 	catalog.GET("/size", c.CatalogSize)
 	catalog.GET("/tags", c.ListTags)

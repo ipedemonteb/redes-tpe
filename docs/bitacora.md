@@ -7,7 +7,7 @@ Registro de avances del TP. Cada entrada dice **qué hicimos**, **por qué**, **
 | 0. Conceptos base | 📖 lectura |
 | 1. Levantar el entorno | ✅ |
 | 2. Atacar la tienda sin WAF | ✅ |
-| 3. Crear el endpoint vulnerable | ⏳ |
+| 3. Crear el endpoint vulnerable | ✅ |
 | 4. Meter el WAF en el medio | ⏳ |
 | 5. Modos, logs e IP real | ⏳ |
 | 6–10. Protecciones 3.1 a 3.5 | ⏳ |
@@ -161,3 +161,34 @@ Fase 1 completada: el clúster está levantado y la tienda funciona en `http://l
 > Detalle cosmético: correr el script varias veces acumula ítems repetidos en los carritos de prueba y suma un reinicio por el `panic`. No afecta la demostración; se puede dejar idempotente más adelante.
 
 > Pendiente para el documento final: corregir en la pre-entrega `address1` → `streetAddress` y suavizar el claim de `health/down`.
+
+---
+
+## 2026-10-24 — Paso 3: endpoint vulnerable `POST /catalog/products`
+
+**Qué hicimos.** Creamos el endpoint "con vulnerabilidades controladas" que faltaba (SQLi + XSS reflejado), repartido en dos servicios para no romper la arquitectura `Ingress → WAF → UI → microservicio`.
+
+**Catalog (Go) — la vulnerabilidad real:**
+- `repository/repository.go`: método `SearchProductsByName` que **concatena `name` directo en el SQL** (`SELECT ... WHERE name LIKE '%<name>%'`) vía `db.Raw`, sin parametrizar → SQLi.
+- `api/catalog.go`: wrapper `SearchProductsByName`.
+- `controller/controller.go`: handler `CreateProduct` (bind del JSON `{name}`) que devuelve **HTML con `name` sin escapar** → XSS reflejado.
+- `main.go`: ruta `catalog.POST("/products", c.CreateProduct)`.
+
+**UI (Java) — el puente:**
+- `web/CatalogController.java`: `@PostMapping("/products")` con `WebClient` que reenvía el body JSON a `http://catalog/catalog/products` y devuelve la respuesta tal cual (incluido el status, con `exchangeToMono`). No sanitiza nada a propósito.
+
+**Build.** `go` no está instalado local; la compilación de Go y Java ocurre en Docker. `./local.sh reload-images` compiló las dos imágenes sin errores y después `kubectl rollout restart deploy -n the-store catalog ui`.
+
+**Verificación (vía UI, como entra el tráfico real):**
+
+| Caso | Resultado |
+| :-- | :-- |
+| `{"name":"Aqua"}` (normal) | 200, devuelve solo "Aqua Ace GT" (filtra bien) |
+| `{"name":"x%' OR 1=1--"}` (SQLi) | 200, devuelve **los 12 productos** → inyección confirmada |
+| `{"name":"<script>alert(1)</script>"}` (XSS) | 200, el `<script>` vuelve **sin escapar** → XSS confirmado |
+| `{"name":"hola",}` (JSON roto, 3.5) | 400, Catalog no puede parsear |
+| body ~500 KB (3.5) | 500, el payload llega al backend y lo rompe (`LIKE pattern too complex`) |
+
+Con esto, los 405 del paso 2 quedaron resueltos: `scripts/attacks/3.3` y `3.5` ahora muestran los ataques reales. Actualizamos sus notas (sacamos los "todavía no existe" y aclaramos qué cambia con WAF: el 400/413 pasará a darlo el borde).
+
+> Recordatorio: el código vulnerable queda a propósito sólo para la POC. En producción el WAF es una capa extra, no reemplaza arreglar el código. Los métodos llevan comentarios `VULNERABLE A PROPÓSITO (POC WAF)`.

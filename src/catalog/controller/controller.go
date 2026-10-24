@@ -161,6 +161,42 @@ func (c *Controller) ListTags(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, accounts)
 }
 
+// CreateProductRequest es el cuerpo JSON de POST /catalog/products.
+type CreateProductRequest struct {
+	Name string `json:"name"`
+}
+
+// CreateProduct registra un producto y devuelve los "similares" por nombre.
+//
+// VULNERABLE A PROPÓSITO (POC WAF): el campo `name` del JSON se concatena en la consulta SQL
+// (SQLi, ver repository.SearchProductsByName) y se refleja en la respuesta HTML sin escapar
+// (XSS reflejado). Existe sólo para que el WAF tenga ataques reales que bloquear en la demo.
+// @Router /catalog/products [post]
+func (c *Controller) CreateProduct(ctx *gin.Context) {
+	var req CreateProductRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		httputil.NewError(ctx, http.StatusBadRequest, err)
+		return
+	}
+
+	products, err := c.api.SearchProductsByName(req.Name, ctx.Request.Context())
+	if err != nil {
+		httputil.NewError(ctx, http.StatusInternalServerError, err)
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString("<html><body>")
+	sb.WriteString("<h1>Producto agregado: " + req.Name + "</h1>")
+	sb.WriteString("<h2>Productos similares</h2><ul>")
+	for _, p := range products {
+		sb.WriteString("<li>" + p.Name + " ($" + strconv.Itoa(p.Price) + ")</li>")
+	}
+	sb.WriteString("</ul></body></html>")
+
+	ctx.Data(http.StatusOK, "text/html; charset=utf-8", []byte(sb.String()))
+}
+
 func getQueryInt(name string, defaultValue int, ctx *gin.Context) (int, error) {
 	str := ctx.Query(name)
 

@@ -18,19 +18,27 @@
 
 package com.amazon.sample.ui.web;
 
+import com.amazon.sample.ui.config.EndpointProperties;
 import com.amazon.sample.ui.services.catalog.CatalogService;
 import com.amazon.sample.ui.web.util.RequiresCommonAttributes;
 import java.util.Collections;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 @Controller
 @RequestMapping("/catalog")
@@ -43,8 +51,14 @@ public class CatalogController {
 
   private CatalogService catalogService;
 
-  public CatalogController(@Autowired CatalogService catalogService) {
+  private final EndpointProperties endpoints;
+
+  public CatalogController(
+    @Autowired CatalogService catalogService,
+    @Autowired EndpointProperties endpoints
+  ) {
     this.catalogService = catalogService;
+    this.endpoints = endpoints;
   }
 
   @GetMapping("")
@@ -64,6 +78,32 @@ public class CatalogController {
     );
 
     return "catalog";
+  }
+
+  /**
+   * POC WAF: puente hacia el endpoint vulnerable de Catalog. Reenvía el cuerpo JSON tal cual a
+   * http://catalog/catalog/products y devuelve la respuesta (HTML con el name sin escapar).
+   * No valida ni sanitiza nada a propósito: así el ataque llega al backend salvo que el WAF lo
+   * frene. Se preserva la arquitectura Ingress -> WAF -> UI -> microservicio.
+   */
+  @PostMapping("/products")
+  @ResponseBody
+  public Mono<ResponseEntity<String>> createProduct(
+    @RequestBody(required = false) String body
+  ) {
+    return WebClient.create(this.endpoints.getCatalog())
+      .post()
+      .uri("/catalog/products")
+      .contentType(MediaType.APPLICATION_JSON)
+      .bodyValue(body == null ? "" : body)
+      .exchangeToMono(response ->
+        response
+          .bodyToMono(String.class)
+          .defaultIfEmpty("")
+          .map(responseBody ->
+            ResponseEntity.status(response.statusCode()).body(responseBody)
+          )
+      );
   }
 
   @GetMapping("/{id}")

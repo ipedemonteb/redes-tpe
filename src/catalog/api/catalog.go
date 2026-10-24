@@ -44,6 +44,11 @@ func (a *CatalogAPI) GetTags(ctx context.Context) ([]model.Tag, error) {
 	return a.repository.GetTags(ctx)
 }
 
+// SearchProductsByName delega en el repositorio la búsqueda vulnerable por nombre (POC WAF).
+func (a *CatalogAPI) SearchProductsByName(name string, ctx context.Context) ([]model.Product, error) {
+	return a.repository.SearchProductsByName(name, ctx)
+}
+
 func (a *CatalogAPI) GetSize(tags []string, ctx context.Context) (int, error) {
 	return a.repository.CountProducts(tags, ctx)
 }

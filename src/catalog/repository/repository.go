@@ -21,6 +21,7 @@ type CatalogRepository interface {
 	CountProducts(tags []string, ctx context.Context) (int, error)
 	GetProduct(id string, ctx context.Context) (*model.Product, error)
 	GetTags(ctx context.Context) ([]model.Tag, error)
+	SearchProductsByName(name string, ctx context.Context) ([]model.Product, error)
 }
 
 func createMySQLDatabase(config config.DatabaseConfiguration) (*gorm.DB, error) {
@@ -176,6 +177,25 @@ func (db *Database) CountProducts(tags []string, ctx context.Context) (int, erro
 	}
 
 	return int(count), nil
+}
+
+// SearchProductsByName busca productos cuyo nombre contenga el texto recibido.
+//
+// VULNERABLE A PROPÓSITO (POC WAF): el parámetro `name` se concatena directamente en la
+// consulta SQL, sin parametrizar. Esto habilita SQL injection (p. ej. name = "x%' OR 1=1--"
+// devuelve toda la tabla). No usar como referencia de código seguro; existe sólo para que el
+// WAF tenga una inyección real que bloquear en la demostración.
+func (db *Database) SearchProductsByName(name string, ctx context.Context) ([]model.Product, error) {
+	products := []model.Product{}
+
+	query := "SELECT * FROM products WHERE name LIKE '%" + name + "%'"
+
+	err := db.DB.WithContext(ctx).Raw(query).Scan(&products).Error
+	if err != nil {
+		return nil, err
+	}
+
+	return products, nil
 }
 
 func (db *Database) GetTags(ctx context.Context) ([]model.Tag, error) {

