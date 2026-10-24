@@ -1,94 +1,79 @@
-# Redes de Información — TP Especial (TPE)
-**ITBA — 2do. Cuatrimestre 2026**
+# Redes de Información - TP Especial
 
-> **Estado de Asignación de Grupo:**
-> * **Tema Asignado:** **Tema 8 — Protección de Servicios con WAF**
-> * **Grupo:** [Completar con N° de Grupo y Miembros]
-> * **Stack Tecnológico Sugerido / Enfoque:** ModSecurity (v3 + OWASP Core Rule Set / CRS), Shadow Daemon, Open WAF / Coraza, Ingress-Nginx WAF Controller.
+**2do. Cuatrimestre 2026**
 
----
+## Objetivo
 
-## 1. Objetivo General
-El objetivo del TP Especial es implementar un componente específico de la arquitectura de una aplicación y demostrar su funcionamiento frente al resto de los alumnos y docentes mediante una exposición oral y técnica.
+El objetivo del TP Especial es que cada grupo implemente un componente específico de la arquitectura de una aplicación y muestre su funcionamiento frente al resto de los alumnos y docentes mediante una exposición oral del tema tratado.
 
-El grupo deberá implementar, demostrar y explicar, sin excepción, cada uno de los puntos requeridos para el tema asignado (**Tema 8: Protección de Servicios con WAF**) como mínimo indispensable para la aprobación de la materia.
+Cada grupo deberá implementar, demostrar y explicar, sin excepción, cada uno de los puntos que se especifican a continuación dentro del tema que haya elegido o le haya sido designado por la cátedra cómo mínimo para la aprobación del TP.
 
----
+## Aplicación
 
-## 2. Aplicación Base: *The Store*
-* La aplicación de referencia es un sitio de comercio electrónico denominado **The Store**, compuesto por una arquitectura orientada a microservicios.
-* El código fuente y la documentación técnica de despliegue se encuentran provistos en el Campus de la cátedra.
-* Se incluye un script para desplegar la aplicación localmente en un clúster de **Kubernetes**, el cual servirá como entorno base para implementar e intercalar la capa del WAF.
+La aplicación es un sitio de comercio en línea llamado The Store compuesta por una serie de microservicios. El código fuente y la documentación se encuentran publicados en el Campus. Se incluye un script para desplegar la aplicación localmente en un clúster de Kubernetes, lo cual sirve para demostrar su despliegue y puede ser utilizado para el desarrollo del TP.
 
----
+## Temas
 
-## 3. Tema Asignado: Protección de Servicios con WAF (Tema 8)
+Cada grupo deberá implementar solo uno de los siguientes módulos de la arquitectura. Existe la posibilidad de presentar una idea nueva de tema a la cátedra de la materia que deberá ser aprobada para su realización.
 
-### 3.1 Tecnologías y Herramientas Base
-* **Motores WAF:** ModSecurity (libmodsecurity v3), Shadow Daemon, Open WAF (o implementaciones modernas compatibles con reglas SecLang / CRS como Coraza).
-* **Reglas y Firmas:** OWASP Core Rule Set (CRS v4 / v3.3).
-* **Integración Arquitectónica:** Reverse Proxy / API Gateway frontal (ej. Nginx con módulo ModSecurity, Ingress Controller en Kubernetes o contenedor sidecar).
+La asignación de Temas por grupo sigue la siguiente dinámica: Primero, se va a recibir un comunicado de Campus pidiendo que creen los Grupos en la herramienta Campus. Son grupos de 3 personas. Ahí se va a asignar un número de Grupo.
 
-### 3.2 Alcance Técnico y Casos de Uso Esperados
-1. **Inspección de Tráfico HTTP/HTTPS:** Capacidad de analizar cabeceras, URI, query params, cookies y el cuerpo (`POST`/`PUT`/`PATCH` con payloads JSON, form-data, etc.).
-2. **Mitigación del OWASP Top 10:**
-   * Inyección SQL (SQLi).
-   * Cross-Site Scripting (XSS).
-   * Path Traversal / Local & Remote File Inclusion (LFI/RFI).
-   * Remote Code Execution (RCE) y Command Injection.
-3. **Modos Operativos:**
-   * *Detection Only / Anomaly Scoring:* Registro de eventos sospechosos sin interrupción del tráfico legítimo (calibración para evitar falsos positivos).
-   * *Active Blocking:* Bloqueo proactivo con código HTTP 403 Forbidden ante umbrales de anomalía superados o firmas críticas coincidentes.
-4. **Auditoría y Trazabilidad:** Logs detallados de transacciones (`audit log`) con correlación de IPs de origen, payload interceptado e identificador de regla (Rule ID).
+Luego, se compartirá una planilla donde cada Grupo va a seleccionar su Tema preferido y su Tema alternativo. Va a ser la opción A y la Opción B. No se va a permitir que más de dos grupos elijan el mismo tema ya que necesitamos variedad, en caso de conflicto, la cátedra va a asignar con su propio criterio el tema.
 
----
+Para el Martes 1 de Septiembre debemos tener los grupos armados y los temas asignados.
 
-## 4. Estructura de Entregas y Cronograma Crítico
+A continuación el listado de Temas:
 
-| Hito | Fecha Límite / Día | Modalidad / Formato |
-| :--- | :--- | :--- |
-| **Pre-entrega** | **Martes 22 de Septiembre — 23:59 hs** | PDF (máximo 4 páginas) vía Campus ITBA |
-| **Revisión de Pre-entrega** | **Jueves 24 de Septiembre** | En clase de la materia (asistencia obligatoria) |
-| **Entrega Final** | **Miércoles 4 de Noviembre — 23:59 hs** | Código, How-to y PPT vía Campus ITBA |
-| **Exposiciones Orales** | **Jueves 5 y Martes 10 de Noviembre** | Exposición remota (máximo 30 min) según sorteo |
+1. Gestión de Infraestructura por Código: Terraform, Pulumi
+2. Observabilidad y Monitoreo de Servicios e Infraestructura: Zabbix (Zabbix Server, Zabbix Agent, Zabbix Proxy) o Grafana (Grafana Server, Prometheus, Loki, Tempo)
+3. Acceso Remoto Seguro: OpenVPN Community Edition, EasyRSA, OpenVPN-GUI, WireGuard, Tailscale
+4. Gestión Centralizada de Logs: ELK (Elasticsearch, Logstash, Kibana) o EFK (Fluentd), Beats, OpenSearch for Elasticsearch
+5. Despliegue y Gestión del Cluster de Kubernetes: Ansible, Minikube, kops, K3s, Kind
+6. CI/CD para el Despliegue y Gestión de los Servicios: Jenkins, CodePipeline, GitHub Actions o similar, Helm
+7. Service Mesh & API Gateway: Kuma, Kong (versión Community)
+8. Protección de Servicios con WAF: ModSecurity, Shadow Daemon, OpenWAF
+9. Asistente Inteligente de Compras con GenAI: Llama, Ollama, llama.cpp, Spring AI, Qdrant, pgvector
 
----
+## Consideraciones especiales
 
-## 5. Requisitos de la Pre-entrega (POC de WAF)
-El documento PDF debe ser conciso (**máximo 4 páginas**) y funcionará como contrato técnico vinculante. Todo lo propuesto deberá estar implementado al 100% en la entrega final.
+- El tipo de diseño y la forma de implementación serán discutidos entre el grupo y la cátedra durante las clases de laboratorio o teóricas, dejando la posibilidad de modificar este enunciado escrito, previo acuerdo entre el docente y los integrantes del grupo.
+- Para la evaluación se tendrá en cuenta no sólo la implementación sino también la exposición oral, el documento de pre-entrega y documento final y la implementación del documento estilo "how-to".
+- Todos los integrantes del grupo deben estar presentes en la presentación y ser oradores.
+- Todos los integrantes deberán ser capaces de responder las preguntas que la cátedra puede hacer durante la presentación.
+- Cualquier aclaración oral a cargo de la cátedra con respecto al enunciado del TPE tiene la misma validez que el enunciado escrito.
+- La calificación del TPE puede ser diferente para cada miembro del equipo. La cátedra evaluará el nivel de participación individual, pudiendo asignar una nota menor o incluso desaprobar a aquellos estudiantes cuya contribución haya sido insuficiente o nula.
+- En cuanto a la temática del trabajo, los estudiantes tienen total libertad para seleccionar el tema que deseen desarrollar. Sin embargo, deben considerar que algunas temáticas podrían implicar costos adicionales para su realización. Los equipos que opten por estos temas asumen la responsabilidad de dichos costos, y esto no podrá ser utilizado como justificación para resultados incompletos o el incumplimiento de las consignas establecidas.
 
-Debe incluir rigurosamente:
-1. **Problemática y Contexto:** Exposición de las superficies de ataque de *The Store* en capa 7 y vectores de riesgo asociados a microservicios expuestos.
-2. **Diseño de la Solución:** Topología del WAF (ej. WAF en borde/Ingress vs. WAF como sidecar o proxy inverso dedicado delante de las rutas críticas como autenticación o checkout).
-3. **Scope de la POC y Casos de Uso:**
-   * Escenarios de tráfico legítimo vs. tráfico anómalo.
-   * Ataques específicos a demostrar (ej. inyecciones en endpoints de búsqueda o login).
-4. **Diagrama de Arquitectura de Red:**
-   * Bloques CIDR y segmentación IP (subredes públicas, privadas o internas del cluster).
-   * Sistemas operativos base de los nodos/contenedores.
-   * Protocolos, puertos expuestos y certificados TLS.
-5. **Alternativas Consideradas:** Justificación de por qué se eligió la combinación tecnológica (ej. ModSecurity + OWASP CRS frente a Shadow Daemon u Open WAF).
+## Pre-entrega
 
----
+Los alumnos deberán realizar, en equipos, una pre-entrega del Trabajo Práctico Especial (TPE). Esta consistirá en un documento PDF que debe ser conciso, de no más de 4 páginas y debe incluir los siguientes temas y otros que crean necesarios para esta instancia de revisión enfocada en la arquitectura de la solución y definición de POC:
 
-## 6. Entrega Final y Exposición Oral
+- Problemática y contexto
+- Diseño de la solución
+- Scope del POC y casos de uso
+- Diagrama de arquitectura: deberá especificar con precisión los bloques CIDR, redes IP, sistemas operativos, protocolos y demás detalles técnicos relevantes
+- Alternativas consideradas
 
-### 6.1 Material a Subir al Campus
-* **Material de pre-entrega:** Versión PDF aprobada/revisada.
-* **Presentación:** Archivo `.ppt` / diapositivas utilizadas en la exposición.
-* **Repositorio en GitHub:**
-  * Código fuente completo de los manifests, configuraciones del WAF y scripts de automatización.
-  * **Documento "How-To":** Guía paso a paso reproducible para clonar, desplegar y poner en marcha el clúster con la protección del WAF y replicar las pruebas de ataque/bloqueo.
+Este documento de pre-entrega será la base para la evaluación final del trabajo: los equipos deberán implementar exactamente lo que propusieron en este documento. Cualquier equipo que no cumpla al 100% con lo especificado en su pre-entrega deberá recuperar el TPE. Por lo tanto, aunque el proceso de revisión y re-entrega inicial no afecta la calificación, el cumplimiento estricto de lo propuesto es fundamental para aprobar el trabajo.
 
-### 6.2 Dinámica de la Exposición
-* **Tiempo:** 30 minutos cronometrados como máximo.
-* **Estructura:** Problema $\rightarrow$ Solución arquitectónica $\rightarrow$ Tecnologías adoptadas $\rightarrow$ **Demostración funcional en vivo (Live Demo)**.
-* **Demo requerida:** Enviar requests normales validadas con éxito (200 OK) y disparar payloads maliciosos evidenciando el bloqueo (403 Forbidden) junto con la entrada generada en el log de auditoría del WAF.
+La cátedra evaluará esta pre-entrega y notificará a los equipos si es necesario agregar más contenido o realizar modificaciones en la propuesta. En caso de que el contenido sea considerado insuficiente, los equipos tendrán una semana adicional para presentar una versión actualizada del documento. Es importante mencionar que este proceso de revisión y potencial re-entrega no tendrá impacto en la calificación final del trabajo.
 
----
+## Entrega Final
 
-## 7. Pautas y Consideraciones Especiales de Cátedra
-* **Asistencia Total:** Todos los integrantes del grupo deben estar presentes tanto en la revisión de la pre-entrega como en la exposición final, y actuar como oradores activos. La ausencia de un integrante invalida la presentación del grupo y envía al equipo a instancia de recuperatorio.
-* **Capacidad de Defensa:** Cada miembro debe poder responder cualquier consulta técnica planteada por la cátedra sobre la arquitectura, el flujo de paquetes y la configuración.
-* **Evaluación Individual:** La calificación final puede diferir entre integrantes en función de la participación, compromiso y dominio demostrados.
-* **Validez de Aclaraciones:** Toda directiva o ajuste oral realizado por la cátedra durante las clases de teoría o laboratorio tiene el mismo peso y validez que el enunciado formal.
+Para la entrega final, los alumnos deberán realizar una presentación de su proyecto con una duración máxima de 30 minutos. En ella, deberán exponer el problema, la solución propuesta, la tecnología adoptada y cualquier otro tema que consideren relevante. Además, es requisito indispensable incluir una demostración funcional del proyecto.
+
+## Material a entregar
+
+Cada grupo deberá subir el siguiente material al Campus en la sección respectiva de su grupo:
+
+- Material de pre-entrega (documento PDF)
+- Presentación a utilizar en la exposición (documento PPT)
+- Código fuente y documento explicativo (how-to), publicado en GitHub, de cómo se realiza la implementación.
+
+## Fecha de entrega, demostración y exposición oral
+
+- El plazo máximo de pre-entrega del TPE es el Martes 22 de Septiembre a las 23:59 hs vía Campus ITBA.
+- La revisión de la pre-entrega del TPE se realizará el Jueves 24 de Septiembre en los horarios de la materia y todos los integrantes deberán estar presentes.
+- El plazo máximo de entrega del TP es el Miércoles 4 de Noviembre a las 23:59 hs vía Campus ITBA.
+- Las presentaciones de los grupos se realizarán los días Jueves 5 y Martes 10 de Noviembre en los horarios de la materia y según orden aleatorio obtenido mediante sorteo. Cada presentación debe demorar cómo máximo 30 minutos. La presentación es on-line y remota.
+- Todos los integrantes del grupo deberán estar presentes en la exposición oral. No se tomarán exposiciones a grupos que no estén presentes todos sus integrantes y considerará desaprobado el TPE en la primera instancia. Siendo la próxima instancia el recuperatorio de TPE.
