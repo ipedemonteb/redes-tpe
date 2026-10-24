@@ -8,7 +8,7 @@ Registro de avances del TP. Cada entrada dice **qué hicimos**, **por qué**, **
 | 1. Levantar el entorno | ✅ |
 | 2. Atacar la tienda sin WAF | ✅ |
 | 3. Crear el endpoint vulnerable | ✅ |
-| 4. Meter el WAF en el medio | ⏳ |
+| 4. Meter el WAF en el medio | ✅ |
 | 5. Modos, logs e IP real | ⏳ |
 | 6–10. Protecciones 3.1 a 3.5 | ⏳ |
 | 11. HTTPS | ⏳ |
@@ -192,3 +192,49 @@ Fase 1 completada: el clúster está levantado y la tienda funciona en `http://l
 Con esto, los 405 del paso 2 quedaron resueltos: `scripts/attacks/3.3` y `3.5` ahora muestran los ataques reales. Actualizamos sus notas (sacamos los "todavía no existe" y aclaramos qué cambia con WAF: el 400/413 pasará a darlo el borde).
 
 > Recordatorio: el código vulnerable queda a propósito sólo para la POC. En producción el WAF es una capa extra, no reemplaza arreglar el código. Los métodos llevan comentarios `VULNERABLE A PROPÓSITO (POC WAF)`.
+
+---
+
+## 2026-10-24 — Paso 4: meter el WAF en el medio
+
+**Qué hicimos.** Armamos la carpeta `waf/` con los 4 manifiestos que describe el plan y los aplicamos al clúster. El motor de ModSecurity queda **apagado** (`MODSEC_RULE_ENGINE=Off`): este paso es solo lograr que el tráfico pase por `Ingress → WAF → UI`, no bloquear nada todavía (eso arranca en el paso 6).
+
+**Elegir el tag de la imagen.** La pre-entrega dice `owasp/modsecurity-crs:nginx`, pero esa etiqueta es flotante. Inspeccionamos el tag en Docker Hub y encontramos el equivalente fijo: **`4.30.0-nginx-202610180210`** (CRS 4.30.0, variante nginx, build del 18/10/2026). Confirmamos que apunta al mismo digest que `nginx` en este momento, así que es la misma imagen con un nombre que no va a cambiar solo.
+
+**Qué vimos al inspeccionar la imagen** (`docker run --rm --entrypoint sh owasp/modsecurity-crs:nginx -c 'env; ls .../rules'`):
+- Puerto de escucha interno: **8080**.
+- Variable de backend: **`BACKEND`** (default `http://localhost:80`).
+- Motor: **`MODSEC_RULE_ENGINE`** (default `on`).
+- Para el paso 5 ya quedan anotadas `SET_REAL_IP_FROM` (default `127.0.0.1`) y `REAL_IP_HEADER` (default `X-REAL-IP`).
+- `/etc/modsecurity.d/owasp-crs/rules/` trae las 855 reglas del CRS completo (familias 900 a 999) más `REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf.example`, que es donde van a enganchar nuestras reglas propias (paso 6+).
+
+**Qué creamos en `waf/`:**
+- `namespace.yaml`: namespace `edge-security`, separado de `the-store` y de `ingress-nginx`. Es la materialización concreta del desacople que propusimos en la pre-entrega (sección 5): el WAF es un componente propio, no un módulo de ingress-nginx.
+- `deployment.yaml`: 1 réplica, `BACKEND=http://ui.the-store.svc.cluster.local` (FQDN completo porque el Service `ui` vive en otro namespace), `MODSEC_RULE_ENGINE=Off`, límites de CPU/memoria.
+- `service.yaml`: `ClusterIP` 80→8080.
+- `ingress.yaml`: `localhost → Service waf`, en `edge-security` (un Ingress solo puede apuntar a Services de su propio namespace, por eso no podía estar en `the-store`).
+- `kustomization.yaml`: junta los 4 archivos para `kubectl apply -k waf/`.
+
+**Sacamos el Ingress viejo.** `dist/kubernetes.yaml` traía un Ingress `ui` que mandaba `localhost` directo al Service de la UI. Lo borramos del clúster (`kubectl delete ingress ui -n the-store`) y del archivo fuente, dejando un comentario explicando por qué: si quedaba, era un camino que esquivaba el WAF por completo.
+
+**Problema al cargar la imagen al nodo kind.** `kind load docker-image owasp/modsecurity-crs:4.30.0-nginx-202610180210 --name the-store` falló:
+```
+ERROR: failed to load image: ... ctr: content digest sha256:0205eea1... not found
+```
+La imagen en Docker Hub es un *manifest list* multi-arquitectura que incluye entradas de "attestation" sin contenido real (`architecture: unknown`), y el comando que usa `kind` por dentro (`ctr images import --all-platforms`) no las sabe manejar. Lo resolvimos pidiéndole al nodo que la descargue él mismo, sin pasar por `kind load`:
+```bash
+docker exec the-store-control-plane ctr --namespace=k8s.io images pull docker.io/owasp/modsecurity-crs:4.30.0-nginx-202610180210
+```
+Así el nodo baja únicamente la plataforma que le corresponde (`arm64` en esta Mac) y evita el bug. Vale la pena recordarlo si se recrea el clúster de cero.
+
+**Verificación:**
+
+| Prueba | Resultado |
+| :-- | :-- |
+| `kubectl get pods -n edge-security` | `waf-...` en `Running`, sin reinicios |
+| `kubectl get ingress -A` | Un solo Ingress: `edge-security/waf` (el de `the-store/ui` ya no existe) |
+| `curl http://localhost/` y `/catalog` | `200` (pasan por `Ingress → WAF → UI`) |
+| `curl "http://localhost/catalog?tag=<script>..."` | `200` (motor en `Off`, todavía no bloquea nada — es lo esperado en este paso) |
+| `kubectl logs -n edge-security deploy/waf` | Aparecen las requests, logueadas con la IP del pod del Ingress (`10.244.0.7`) como cliente; `ModSecurity-nginx v1.0.4 (rules loaded ... 855 ...)` confirma que el CRS cargó |
+
+Con esto, la cadena `Ingress → WAF → UI` que propusimos en la pre-entrega ya es real en el clúster. Falta: IP real del cliente vía `X-Real-IP` + modos on/detect/off + audit log estructurado (paso 5).

@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: waf
+  namespace: edge-security
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: waf
+  template:
+    metadata:
+      labels:
+        app: waf
+    spec:
+      containers:
+        - name: waf
+          image: owasp/modsecurity-crs:4.30.0-nginx-202610180210
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: BACKEND
+              value: "http://ui.the-store.svc.cluster.local"
+            - name: MODSEC_RULE_ENGINE
+              value: "Off"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
