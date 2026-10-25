@@ -5,3 +5,8 @@ resources:
   - deployment.yaml
   - service.yaml
   - ingress.yaml
+configMapGenerator:
+  - name: waf-nginx
+    namespace: edge-security
+    files:
+      - nginx/realip.conf

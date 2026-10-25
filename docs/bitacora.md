@@ -9,7 +9,7 @@ Registro de avances del TP. Cada entrada dice **qué hicimos**, **por qué**, **
 | 2. Atacar la tienda sin WAF | ✅ |
 | 3. Crear el endpoint vulnerable | ✅ |
 | 4. Meter el WAF en el medio | ✅ |
-| 5. Modos, logs e IP real | ⏳ |
+| 5. Modos, logs e IP real | ✅ |
 | 6–10. Protecciones 3.1 a 3.5 | ⏳ |
 | 11. HTTPS | ⏳ |
 | 12. Cerrar caminos alternativos | ⏳ |
@@ -238,3 +238,81 @@ Así el nodo baja únicamente la plataforma que le corresponde (`arm64` en esta 
 | `kubectl logs -n edge-security deploy/waf` | Aparecen las requests, logueadas con la IP del pod del Ingress (`10.244.0.7`) como cliente; `ModSecurity-nginx v1.0.4 (rules loaded ... 855 ...)` confirma que el CRS cargó |
 
 Con esto, la cadena `Ingress → WAF → UI` que propusimos en la pre-entrega ya es real en el clúster. Falta: IP real del cliente vía `X-Real-IP` + modos on/detect/off + audit log estructurado (paso 5).
+
+---
+
+## 2026-10-24 — Paso 5: modos, logs e IP real
+
+**Qué hicimos.** Tres cosas: un script para cambiar el modo del motor, el audit log JSON de cada transacción y que el WAF vea la IP real del cliente.
+
+### 1. Modos del motor — `scripts/waf.sh`
+
+```bash
+./scripts/waf.sh mode on|detect|off     # cambia MODSEC_RULE_ENGINE (On / DetectionOnly / Off) y espera el rollout
+./scripts/waf.sh status
+```
+
+Por dentro hace `kubectl set env deploy/waf -n edge-security MODSEC_RULE_ENGINE=...`, lo que reinicia el pod.
+
+> ⚠️ `kubectl apply -k waf/` **vuelve a poner el modo `Off`**, porque el YAML es la fuente de verdad. Después de aplicar, hay que volver a correr `waf.sh mode ...`.
+
+### 2. Audit log estructurado
+
+Variables nuevas en `waf/deployment.yaml`: `MODSEC_AUDIT_ENGINE=On` (**todas** las transacciones; el default `RelevantOnly` solo registra las sospechosas y no cumpliría la pre-entrega), `MODSEC_AUDIT_LOG_FORMAT=JSON` y `MODSEC_AUDIT_LOG=/dev/stdout`.
+
+- Con el motor en `Off` **no se genera audit log**: ModSecurity no analiza la transacción. Solo hay access log de NGINX. El audit log aparece en `DetectionOnly` y `On`.
+- Cómo leerlo:
+  ```bash
+  kubectl logs -n edge-security deploy/waf | grep '^{"transaction"' | tail -1 \
+    | jq '.transaction | {client_ip, uri: .request.uri, code: .response.http_code, rules: [.messages[].details.ruleId]}'
+  ```
+
+### 3. IP real del cliente
+
+**Problema que apareció.** Con solo las variables de entorno `SET_REAL_IP_FROM` y `REAL_IP_HEADER` el audit log seguía mostrando `client_ip: 10.244.0.7` (el pod del Ingress). Revisamos la config generada dentro del pod (`kubectl exec ... grep -rn real_ip /etc/nginx`): la imagen escribe `set_real_ip_from` / `real_ip_header` **dentro de `location /`** (en `includes/proxy_backend.conf`). En ese contexto el módulo `realip` actúa recién en la fase *preaccess*, y ModSecurity ya corrió antes y leyó la IP de la conexión TCP.
+
+**Solución.** Definir las mismas directivas a **nivel `http`**. Como `nginx.conf` incluye `/etc/nginx/conf.d/*.conf` dentro de `http`, agregamos `waf/nginx/realip.conf`, generado como ConfigMap por Kustomize y montado con `subPath` en `/etc/nginx/conf.d/realip.conf`:
+
+```nginx
+set_real_ip_from 10.244.0.0/16;
+real_ip_header X-Real-IP;
+real_ip_recursive on;
+```
+
+**Segundo problema (Kustomize).** El pod quedó en `ContainerCreating` con `configmap "waf-nginx" not found`: Kustomize le agrega un hash al nombre del ConfigMap y reescribe las referencias, pero no lo hizo porque el generador no tenía `namespace` y el Deployment sí. Se arregló poniendo `namespace: edge-security` en el `configMapGenerator`. Efecto buscado: al cambiar el archivo cambia el hash y el WAF se reinicia solo.
+
+### Verificación
+
+| Prueba | Resultado |
+| :-- | :-- |
+| `curl "http://localhost/catalog?tag=<script>alert(1)</script>"` en `detect` | `200`, queda en el audit log con `client_ip: 172.18.0.1` (antes `10.244.0.7`) y reglas `941100, 941110, 941160, 941390, 949110` |
+| `curl -H "X-Real-IP: 1.2.3.4" http://localhost/catalog` | el log muestra `172.18.0.1`: el Ingress **pisa** el header falso, no se puede mentir la IP desde afuera |
+| Navegación normal (`/`, `/catalog`, `/catalog?tag=tools`, `/cart`, `/checkout`, `POST /cart`) en `detect` | **ninguna** regla salta con tráfico legítimo → sin falsos positivos por ahora |
+| Mismo XSS en modo `on` | **`403`** |
+| `/catalog?tag=tools` en modo `on` | `200` |
+
+### Revisión final del paso 5: 502 al cambiar de modo
+
+En la revisión final, el primer request justo después de `waf.sh mode ...` daba a veces **502**. Lo reprodujimos alternando `on`/`off` y pegando un `curl` inmediato. En el log del Ingress: `connect() failed (111: Connection refused) while connecting to upstream` contra la IP del pod **viejo**. Al cambiar el modo, Kubernetes reemplaza el pod: el viejo recibe SIGTERM, NGINX cierra al instante, pero el Ingress tarda un momento en sacarlo de sus destinos y le sigue mandando tráfico.
+
+Cambios en `waf/deployment.yaml`:
+- `lifecycle.preStop: sleep 8`: el pod viejo sigue atendiendo mientras se propaga el cambio.
+- `readinessProbe` (`tcpSocket` 8080): el pod nuevo no recibe tráfico hasta que NGINX escucha.
+
+Efecto secundario que apareció al probarlo: durante esos ~8 s el pod viejo (con el modo anterior) todavía puede contestar, así que con `mode on` + un ataque inmediato el XSS devolvía 200 y no había audit log. Por eso `scripts/waf.sh` ahora, después del `rollout status`, **espera a que no queden pods en `Terminating`** antes de dar el cambio por hecho. Con eso, 7 cambios seguidos de modo (`off, detect, on, off, on, detect, off`) dieron los resultados esperados y ningún 502.
+
+> Consecuencia práctica: `waf.sh mode ...` tarda unos 10–15 s. En la demo conviene cambiar el modo *antes* de empezar a mostrar los ataques.
+
+Matriz final con la config definitiva (compra = `POST /cart` / `GET /cart` / `GET /checkout`):
+
+| Modo | `/`, `/catalog`, `?tag=tools` | XSS y SQLi en `?tag=` | Compra | Audit log |
+| :-- | :-- | :-- | :-- | :-- |
+| `Off` | 200 | 200 | 303 / 200 / 200 | no genera |
+| `DetectionOnly` | 200 | 200 (queda logueado: 941xxx / 942100 + 949110) | 303 / 200 / 200 | sí, con `client_ip: 172.18.0.1` |
+| `On` | 200 | **403** | 303 / 200 / 200 | sí |
+
+Dato para los scripts de ataque: para agregar al carrito hay que usar un `productId` real (por ejemplo `cc789f85-1476-452a-8100-9e74502198e0`, de `samples/data/products.json`); con uno inventado la UI responde 500 aun sin WAF.
+
+**Adelanto del paso 7.** El XSS en `?tag=` ya da 403 sin escribir ninguna regla: lo bloquea el CRS por puntaje (las reglas 941xxx suman y la **949110** supera el umbral). El paso 7 queda en entenderlo y documentarlo.
+
+**Pendiente:** el WAF quedó en `Off`. La checklist de falsos positivos se repite con el checkout completo (`POST /checkout`, JSON de `/catalog/products`) en los pasos 8 y 10.

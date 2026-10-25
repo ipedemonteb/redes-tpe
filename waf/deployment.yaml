@@ -24,6 +24,33 @@ spec:
               value: "http://ui.the-store.svc.cluster.local"
             - name: MODSEC_RULE_ENGINE
               value: "Off"
+            # Audit log
+            # On = todas las transacciones (RelevantOnly sería solo las sospechosas).
+            - name: MODSEC_AUDIT_ENGINE
+              value: "On"
+            - name: MODSEC_AUDIT_LOG_FORMAT
+              value: "JSON"
+            - name: MODSEC_AUDIT_LOG
+              value: "/dev/stdout"
+            # IP real del cliente: confiamos en X-Real-IP solo si la conexión
+            # viene del rango de pods (donde vive el Ingress).
+            - name: SET_REAL_IP_FROM
+              value: "10.244.0.0/16"
+            - name: REAL_IP_HEADER
+              value: "X-Real-IP"
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "8"]
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            periodSeconds: 2
+            failureThreshold: 3
+          volumeMounts:
+            - name: nginx-extra
+              mountPath: /etc/nginx/conf.d/realip.conf
+              subPath: realip.conf
           resources:
             requests:
               cpu: 100m
@@ -31,3 +58,7 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
+      volumes:
+        - name: nginx-extra
+          configMap:
+            name: waf-nginx
