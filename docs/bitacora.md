@@ -10,7 +10,8 @@ Registro de avances del TP. Cada entrada dice **qué hicimos**, **por qué**, **
 | 3. Crear el endpoint vulnerable | ✅ |
 | 4. Meter el WAF en el medio | ✅ |
 | 5. Modos, logs e IP real | ✅ |
-| 6–10. Protecciones 3.1 a 3.5 | ⏳ |
+| 6. Protección 3.1 (paths sensibles + IP) | ✅ |
+| 7–10. Protecciones 3.2 a 3.5 | ⏳ |
 | 11. HTTPS | ⏳ |
 | 12. Cerrar caminos alternativos | ⏳ |
 | 13. Scripts de tests y demo | ⏳ |
@@ -316,3 +317,37 @@ Dato para los scripts de ataque: para agregar al carrito hay que usar un `produc
 **Adelanto del paso 7.** El XSS en `?tag=` ya da 403 sin escribir ninguna regla: lo bloquea el CRS por puntaje (las reglas 941xxx suman y la **949110** supera el umbral). El paso 7 queda en entenderlo y documentarlo.
 
 **Pendiente:** el WAF quedó en `Off`. La checklist de falsos positivos se repite con el checkout completo (`POST /checkout`, JSON de `/catalog/products`) en los pasos 8 y 10.
+
+## Paso 6 — Protección 3.1: paths sensibles + IP
+
+**Qué hicimos.** Primera regla propia del WAF: la `10100`, que bloquea con 403 los endpoints internos (`/utility`, `/proxy`, `/actuator`, `/info`, `/topology`) cuando la IP de origen no es del clúster. Es la regla única que la pre-entrega comprometió para 3.1. La explicación completa de la sintaxis quedó en [explicaciones.md](explicaciones.md#7-anatomía-de-una-regla-la-10100-31).
+
+Se hizo en dos partes:
+- **Parte A — mecanismo de carga.** La imagen `owasp/modsecurity-crs` arma al arrancar un `setup.conf` con `Include /etc/modsecurity.d/owasp-crs/rules/*.conf` (ese dir es un symlink a `/opt/owasp-crs`). Montando ahí un `.conf` propio, ModSecurity lo carga solo. Se descartó `modsecurity-override.conf` porque el entrypoint le hace `touch` y, montado read-only por el ConfigMap, el `touch` falla y el contenedor no levanta.
+- **Parte B — la regla real.** Chain de dos condiciones (path interno **AND** IP externa) en `phase:1`, con `deny,status:403`. Transformaciones `t:urlDecodeUni,t:normalizePath,t:lowercase` para que no se evada con mayúsculas, `//`, `%`-encoding ni `..`.
+
+**Cambios en el repo:**
+- `waf/modsec/custom-rules.conf` (nuevo): la regla `10100`.
+- `waf/kustomization.yaml`: nuevo `configMapGenerator` `waf-modsec-rules` (con `namespace: edge-security`, si no Kustomize no reescribe la referencia).
+- `waf/deployment.yaml`: `volume` + `volumeMount` con `subPath` en `/etc/modsecurity.d/owasp-crs/rules/zzz-custom-rules.conf` (el `zzz` lo carga después del CRS; `subPath` evita tapar los ~30 archivos de reglas del CRS).
+
+**Nota de entorno.** El clúster estaba borrado y faltaban `kind` y `kubectl`. Se instalaron en `~/.local/bin` (kubectl v1.37.2, kind v0.24.0) y se recreó todo con `./local.sh create-cluster --skip-tests`. `local.sh` no despliega el WAF, así que se aplicó aparte con `kubectl apply -k waf/`.
+
+**Qué vimos** (clúster real, modo `On`):
+
+| Prueba | Resultado |
+| :-- | :-- |
+| `/proxy/orders`, `/actuator/metrics`, `/utility/health/down`, `/info`, `/topology` desde afuera | **403** |
+| Bypasses: `/Utility/panic`, `//proxy/orders`, `/%70roxy/orders`, `/catalog/../proxy/orders` | **403** |
+| `/`, `/catalog`, `/catalog?tag=tools` | **200** |
+| `/proxy/orders` desde un pod interno (IP `10.244.x`) | **200** (la allowlist lo deja pasar) |
+| Audit log del 403 | `client_ip: 172.19.0.1` (IP real vía `X-Real-IP`→`realip`→`REMOTE_ADDR`), `http_code: 403`, regla `['10100']` |
+
+También se comprobó que una CIDR inválida (`@ipMatch 0.0.0.0/0`) hace que NGINX no arranque → el pod no pasa el `readinessProbe` y el viejo sigue sirviendo: config rota no llega a producción.
+
+**Validación extra sin clúster.** Antes de tocar Kubernetes, el mecanismo se probó contra la imagen sola con `docker run` montando el `.conf`: confirmó que carga (`/waf-selftest` → 418 con una regla dummy) y después la `10100` (403 + bypasses). El build de Kustomize se validó con la imagen oficial `registry.k8s.io/kustomize/kustomize`, viendo el ConfigMap con hash (`waf-modsec-rules-ctcm9796t7`) y la referencia del Deployment reescrita al mismo hash.
+
+**Pendiente:**
+- Correr el `scripts/attacks/3.1-paths-ip.sh` entero no sirve con el WAF en `On`: incluye `/utility/panic` y después espera ~2 min a que Kubernetes reinicie la UI; con el panic bloqueado esa espera cuelga. Sirve para la evidencia "sin WAF" (modo `Off`).
+- La contraprueba "desde adentro" vía el Service del WAF dio 200; falta, si se quiere, repetirla pegándole al Ingress con Host (como figura en el plan).
+- `kind`/`kubectl` quedaron en `~/.local/bin`: agregarlo al PATH en la terminal normal (`export PATH="$HOME/.local/bin:$PATH"`).

@@ -51,6 +51,12 @@ spec:
             - name: nginx-extra
               mountPath: /etc/nginx/conf.d/realip.conf
               subPath: realip.conf
+            # Reglas propias: el setup.conf de la imagen incluye
+            # /etc/modsecurity.d/owasp-crs/rules/*.conf, así que dejar el
+            # archivo ahí alcanza para que ModSecurity lo cargue.
+            - name: modsec-rules
+              mountPath: /etc/modsecurity.d/owasp-crs/rules/zzz-custom-rules.conf
+              subPath: custom-rules.conf
           resources:
             requests:
               cpu: 100m
@@ -62,3 +68,6 @@ spec:
         - name: nginx-extra
           configMap:
             name: waf-nginx
+        - name: modsec-rules
+          configMap:
+            name: waf-modsec-rules

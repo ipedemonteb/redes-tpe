@@ -10,3 +10,9 @@ configMapGenerator:
     namespace: edge-security
     files:
       - nginx/realip.conf
+  # Reglas propias de ModSecurity (IDs 10000-19999). Kustomize le agrega un hash
+  # al nombre, así que al cambiar el archivo el Deployment se reinicia solo.
+  - name: waf-modsec-rules
+    namespace: edge-security
+    files:
+      - modsec/custom-rules.conf
