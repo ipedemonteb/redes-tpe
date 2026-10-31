@@ -11,6 +11,7 @@ Apuntes para **repasar y defender** el TP. Mientras implementamos las proteccion
 5. [Volúmenes en el Deployment](#5-volúmenes-en-el-deployment)
 6. [Flujo completo: cambiar una regla con el sistema corriendo](#6-flujo-completo-cambiar-una-regla-con-el-sistema-corriendo)
 7. [Anatomía de una regla: la `10100` (3.1)](#7-anatomía-de-una-regla-la-10100-31)
+8. [Query params: cuando NO escribimos regla (3.2)](#8-query-params-cuando-no-escribimos-regla-32)
 
 ---
 
@@ -279,3 +280,72 @@ Desde adentro (IP en `10.244.0.0/16`) → la 2ª condición es falsa → pasa (2
 | 949110 | **el bloqueo por puntaje** (anomaly scoring) |
 
 Nuestras reglas: `10000–19999`. El CRS: `900000+`.
+
+---
+
+## 8. Query params: cuando NO escribimos regla (3.2)
+
+La protección 3.2 (inyección SQLi/XSS en `GET /catalog?tag=...`) es el caso opuesto a la 3.1, y por eso es la más importante de entender bien.
+
+### Por qué acá no hay regla propia
+
+En 3.1 el endpoint (`/utility`, `/proxy`, …) es **nuestro**: el CRS no lo conoce, así que si no escribíamos la `10100` nadie lo protegía.
+
+En 3.2 el ataque es **SQLi y XSS**, que son ataques genéricos y conocidos. De eso ya se encarga el **OWASP CRS** que viene en la imagen, con cientos de reglas hechas y mantenidas por OWASP. Escribir una regla propia de SQLi sería:
+
+- **Redundante:** repetir algo que el CRS ya hace.
+- **Peor:** nuestra regex casera cubriría muchos menos casos que las reglas del CRS (que usan *libinjection*, ver abajo).
+
+Regla general del TP: **regla propia solo cuando el CRS no cubre el caso** (endpoints nuestros, lógica de negocio, IP). Para ataques estándar, se usa y se afina el CRS.
+
+### Entonces, ¿dónde está declarada la protección?
+
+En ningún archivo nuestro — y está bien. **Ya viene declarada dentro de la imagen.** La imagen `owasp/modsecurity-crs` no trae solo el motor: trae **todo el CRS ya escrito** en archivos `.conf`. Esos archivos *son* las reglas. En el pod conviven:
+
+```
+/etc/modsecurity.d/owasp-crs/rules/
+├── REQUEST-941-APPLICATION-ATTACK-XSS.conf     ← OWASP (XSS)
+├── REQUEST-942-APPLICATION-ATTACK-SQLI.conf    ← OWASP (SQLi)
+├── REQUEST-949-BLOCKING-EVALUATION.conf        ← OWASP (bloqueo por score)
+└── zzz-custom-rules.conf                        ← lo ÚNICO nuestro (la 10100)
+```
+
+La `942100` que vimos saltar está escrita en la línea 47 de `REQUEST-942-...-SQLI.conf`. No la escribimos nosotros: ya estaba.
+
+**Por qué esas reglas están activas sin que hagamos nada:** es el mismo mecanismo de carga del punto 2. El `setup.conf` de la imagen hace `Include /etc/modsecurity.d/owasp-crs/rules/*.conf`, y ese `*.conf` carga **todos** los archivos de la carpeta en un solo barrido: los de OWASP (941/942/949…) **y** el nuestro. Por eso la protección de SQLi/XSS queda activa sola, solo por usar la imagen; lo nuestro (la `10100`) se suma al mismo barrido.
+
+Dicho directo: **para SQLi/XSS no declaramos nada porque ya está declarado en los `.conf` del CRS.** La `10100` del paso 6 hizo falta solo porque `/utility`, `/proxy`, etc. son endpoints propios que OWASP no puede conocer.
+
+### Qué hay que entender igual: cómo decide el CRS
+
+Aunque no escribamos nada, en la defensa hay que saber **qué reglas saltaron y por qué**. Dos ideas:
+
+**1. libinjection (no es regex).** Las reglas base `942100` (SQLi) y `941100` (XSS) no usan expresiones regulares: usan *libinjection*, que **tokeniza** el input como si fuera código SQL o HTML y decide si "parece" una inyección real. Es mucho más preciso que una regex y casi no da falsos positivos.
+
+**2. Anomaly scoring (la regla que detecta ≠ la que bloquea).** Esto ya salió con la `10100`, pero acá se ve en acción:
+
+- Cada regla que matchea **solo suma puntos** a un contador (una crítica suma +5).
+- La que **bloquea** es la **`949110`**, al final de la fase, cuando el total pasa el umbral (default **5**).
+- Por eso en el log de un mismo ataque aparecen **varias reglas** (las que sumaron) **y además** la `949110` (la que cortó).
+
+### Lo que medimos en el clúster real
+
+Con `MODSEC_RULE_ENGINE=On`, contra `localhost` (modo `On`):
+
+| Request | Código | Reglas en el audit log |
+| :-- | :-- | :-- |
+| `?tag=1' OR '1'='1` (SQLi) | **403** | `942100` (+5) → `949110` (score 5) |
+| `?tag=<script>alert(1)</script>` (XSS) | **403** | `941100`, `941110`, `941160`, `941390` → `949110` (score 20) |
+| `?tag=tools` (legítimo) | **200** | — (no matchea nada) |
+
+Detalles que conviene saber para la defensa:
+
+- El **SQLi cortó con un solo hit** (`942100`, +5): alcanzó justo el umbral de 5. El **XSS acumuló 20** porque varias reglas lo detectaron a la vez (libinjection + el filtro del tag `<script>` + inyección HTML + método JS). Más señales → más puntaje, pero con una crítica ya alcanza.
+- Los mensajes salen literales del log (`"SQL Injection Attack Detected via libinjection"`, `"XSS Filter - Category 1: Script Tag Vector"`, etc.). **No los asumimos: los leímos del audit log.**
+- `/catalog` **no** lo bloquea nuestra `10100` porque no está en la lista de paths internos, así que la request llega hasta la inspección del CRS. Las dos protecciones conviven sin pisarse.
+
+### El detalle fino: defensa en profundidad
+
+Catalog hoy **no es vulnerable** (parametriza la consulta). Entonces, ¿para qué bloquear? Porque el WAF es una **capa extra**: si mañana una dependencia o un cambio de código reintroduce la inyección, el ataque igual muere en el WAF antes de tocar el servicio. Se protege el *patrón de ataque*, no un bug puntual.
+
+> Para experimentar (no va en la entrega): subir el umbral (`ANOMALY_INBOUND`) y ver qué deja de cortar, o probar que el CRS también cubre path traversal (`930xxx`) y command injection (`932xxx`) con otros valores de `tag`.

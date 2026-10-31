@@ -11,7 +11,8 @@ Registro de avances del TP. Cada entrada dice **qué hicimos**, **por qué**, **
 | 4. Meter el WAF en el medio | ✅ |
 | 5. Modos, logs e IP real | ✅ |
 | 6. Protección 3.1 (paths sensibles + IP) | ✅ |
-| 7–10. Protecciones 3.2 a 3.5 | ⏳ |
+| 7. Protección 3.2 (query params: SQLi/XSS) | ✅ |
+| 8–10. Protecciones 3.3 a 3.5 | ⏳ |
 | 11. HTTPS | ⏳ |
 | 12. Cerrar caminos alternativos | ⏳ |
 | 13. Scripts de tests y demo | ⏳ |
@@ -351,3 +352,32 @@ También se comprobó que una CIDR inválida (`@ipMatch 0.0.0.0/0`) hace que NGI
 - Correr el `scripts/attacks/3.1-paths-ip.sh` entero no sirve con el WAF en `On`: incluye `/utility/panic` y después espera ~2 min a que Kubernetes reinicie la UI; con el panic bloqueado esa espera cuelga. Sirve para la evidencia "sin WAF" (modo `Off`).
 - La contraprueba "desde adentro" vía el Service del WAF dio 200; falta, si se quiere, repetirla pegándole al Ingress con Host (como figura en el plan).
 - `kind`/`kubectl` quedaron en `~/.local/bin`: agregarlo al PATH en la terminal normal (`export PATH="$HOME/.local/bin:$PATH"`).
+
+---
+
+## Paso 7 — Protección 3.2: query params (SQLi / XSS)
+
+**Qué hicimos:** verificamos que el **OWASP CRS** (el que trae la imagen) bloquea SQLi y XSS en `GET /catalog?tag=...`. **No escribimos regla propia**: a diferencia de la 3.1, acá el ataque es genérico y el CRS ya lo cubre; una regla casera sería redundante y peor. El trabajo fue confirmar el bloqueo y **anotar los Rule IDs reales del audit log** (no asumirlos).
+
+**Por qué no hay regla nueva:** regla propia solo cuando el CRS no conoce el caso (endpoints nuestros, lógica, IP → la `10100`). Para ataques estándar (SQLi/XSS) se usa y se afina el CRS. Por eso `custom-rules.conf` **no cambió** en este paso.
+
+**Cómo decide el CRS (lo que hay que saber para defender):**
+- `942100` (SQLi) y `941100` (XSS) usan **libinjection** (tokenizan el input, no regex) → preciso y con pocos falsos positivos.
+- **Anomaly scoring:** las reglas que matchean **suman puntos**; la que **bloquea** es la **`949110`** cuando el total pasa el umbral (default 5). Por eso en el log aparecen varias reglas + la `949110`.
+
+**Verificación en el clúster real** (`MODSEC_RULE_ENGINE=On`, contra `localhost`):
+
+| Request | Código | Reglas (audit log) |
+| :-- | :-- | :-- |
+| `?tag=1' OR '1'='1` (SQLi) | 403 | `942100` (+5) → `949110` (score 5) |
+| `?tag=<script>alert(1)</script>` (XSS) | 403 | `941100`, `941110`, `941160`, `941390` → `949110` (score 20) |
+| `?tag=tools` (legítimo) | 200 | — |
+
+El SQLi cortó con un solo hit crítico (justo el umbral 5); el XSS acumuló 20 porque lo detectaron 4 reglas a la vez. `/catalog` no lo toca la `10100` (no es path interno), así que llega a la inspección del CRS: las dos protecciones conviven.
+
+**Rule IDs confirmados (leídos del log, para la PPT):** 942100, 941100, 941110, 941160, 941390, 949110.
+
+**Explicación completa:** sección 8 de [explicaciones.md](explicaciones.md#8-query-params-cuando-no-escribimos-regla-32).
+
+**Pendiente:**
+- Para la evidencia "sin WAF" de este ataque, correr los mismos 3 curls en modo `Off` (deberían dar 200/200/200) y guardarlo.
