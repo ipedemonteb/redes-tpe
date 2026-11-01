@@ -12,7 +12,8 @@ Registro de avances del TP. Cada entrada dice **qué hicimos**, **por qué**, **
 | 5. Modos, logs e IP real | ✅ |
 | 6. Protección 3.1 (paths sensibles + IP) | ✅ |
 | 7. Protección 3.2 (query params: SQLi/XSS) | ✅ |
-| 8–10. Protecciones 3.3 a 3.5 | ⏳ |
+| 8. Protección 3.3 (body: form + JSON) | ✅ |
+| 9–10. Protecciones 3.4 a 3.5 | ⏳ |
 | 11. HTTPS | ⏳ |
 | 12. Cerrar caminos alternativos | ⏳ |
 | 13. Scripts de tests y demo | ⏳ |
@@ -381,3 +382,29 @@ El SQLi cortó con un solo hit crítico (justo el umbral 5); el XSS acumuló 20 
 
 **Pendiente:**
 - Para la evidencia "sin WAF" de este ataque, correr los mismos 3 curls en modo `Off` (deberían dar 200/200/200) y guardarlo.
+
+---
+
+## Paso 8 — Protección 3.3: body (form urlencoded + JSON)
+
+**Qué hicimos:** verificamos que el CRS inspecciona el **cuerpo** de los `POST` (no solo la URL). **Sin regla propia** otra vez: reusa las familias 941/942, igual que la 3.2. Lo nuevo es el mecanismo: el WAF **bufferiza** el body en fase 2 y lo **parsea según el `Content-Type`**; una vez parseado, los campos quedan en `ARGS_POST` y aplican las mismas reglas, sin importar el formato.
+
+**Idea central (para la demo):** form y JSON terminan los dos en `ARGS_POST`, así que una sola familia de reglas cubre ambos. Lo único que cambia es el nombre de la variable (`ARGS:firstName` vs `ARGS:json.name`).
+
+**Verificación en el clúster real** (modo `On`):
+
+| Request | Código | Variable | Reglas |
+| :-- | :-- | :-- | :-- |
+| `POST /checkout` form, XSS en `firstName` | 403 | `ARGS:firstName` | 941100/110/160/390 → 949110 |
+| `POST /catalog/products` JSON, SQLi en `name` | 403 | `ARGS:json.name` | 942100 → 949110 |
+| `POST /catalog/products` JSON, XSS en `name` | 403 | `ARGS:json.name` | 941100/110/160/390 → 949110 |
+| idem SQLi con `Content-Type: text/plain` | 403 | — | **920420** (content-type no permitido) → 949110 |
+
+**Dato extra (evasión tapada):** mandar el payload con un `Content-Type` raro (`text/plain`) para evitar el parseo no funciona: lo frena la `920420` ("Request content type is not allowed by policy") antes de llegar al servicio.
+
+**Rule IDs confirmados (del log):** 941100, 941110, 941160, 941390, 942100, 920420, 949110.
+
+**Explicación completa:** sección 9 de [explicaciones.md](explicaciones.md#9-body-buffering-parseo-y-args_post-33).
+
+**Pendiente:**
+- Evidencia "sin WAF" (modo `Off`): correr los mismos POST y confirmar que pasan (y que el `/catalog/products` refleja la SQLi/XSS, que es la vuln controlada del POC).

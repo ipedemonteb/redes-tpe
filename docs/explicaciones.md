@@ -12,6 +12,7 @@ Apuntes para **repasar y defender** el TP. Mientras implementamos las proteccion
 6. [Flujo completo: cambiar una regla con el sistema corriendo](#6-flujo-completo-cambiar-una-regla-con-el-sistema-corriendo)
 7. [Anatomía de una regla: la `10100` (3.1)](#7-anatomía-de-una-regla-la-10100-31)
 8. [Query params: cuando NO escribimos regla (3.2)](#8-query-params-cuando-no-escribimos-regla-32)
+9. [Body: buffering, parseo y `ARGS_POST` (3.3)](#9-body-buffering-parseo-y-args_post-33)
 
 ---
 
@@ -349,3 +350,58 @@ Detalles que conviene saber para la defensa:
 Catalog hoy **no es vulnerable** (parametriza la consulta). Entonces, ¿para qué bloquear? Porque el WAF es una **capa extra**: si mañana una dependencia o un cambio de código reintroduce la inyección, el ataque igual muere en el WAF antes de tocar el servicio. Se protege el *patrón de ataque*, no un bug puntual.
 
 > Para experimentar (no va en la entrega): subir el umbral (`ANOMALY_INBOUND`) y ver qué deja de cortar, o probar que el CRS también cubre path traversal (`930xxx`) y command injection (`932xxx`) con otros valores de `tag`.
+
+---
+
+## 9. Body: buffering, parseo y `ARGS_POST` (3.3)
+
+La 3.3 es la misma idea que la 3.2 (el CRS hace el trabajo, no escribimos regla), pero el ataque ahora viaja en el **cuerpo** del `POST`, no en la URL. Eso agrega dos pasos que en la query no existían: **bufferizar** y **parsear**.
+
+### Por qué el body es un punto de inspección aparte
+
+Para mirar un query param, el WAF ya tiene la URL completa apenas llegan los headers (fase 1). El body es distinto:
+
+- **Buffering:** el cuerpo puede venir en pedazos y el WAF necesita **guardarlo entero** antes de poder analizarlo. Esto pasa en **fase 2** (después de tener todo el request). Guardar el body cuesta memoria y tiempo → por eso hay un límite de tamaño (ver 3.5 / paso 10).
+- **Parseo según `Content-Type`:** el body es texto crudo; el WAF lo interpreta según el header `Content-Type`:
+  - `application/x-www-form-urlencoded` → cada campo del form.
+  - `application/json` → cada campo del JSON.
+
+### La idea central: todo termina en `ARGS_POST`
+
+Después de parsear, **sin importar el formato original**, cada campo queda en la variable `ARGS_POST`:
+
+| Enviado como | Variable que ve el CRS |
+| :-- | :-- |
+| form `firstName=...` | `ARGS:firstName` |
+| JSON `{"name":"..."}` | `ARGS:json.name` |
+
+Como las reglas 941/942 inspeccionan `ARGS` (que incluye `ARGS_POST`), **las mismas reglas cubren los dos formatos**. No hay una regla "para JSON" y otra "para forms": hay una sola, y el parser se encarga de normalizar. Ese es el concepto a transmitir en la demo.
+
+### Lo que medimos en el clúster real (modo `On`)
+
+| Request | Código | Variable que matcheó | Reglas (audit log) |
+| :-- | :-- | :-- | :-- |
+| `POST /checkout` (form), XSS en `firstName` | 403 | `ARGS:firstName` | 941100, 941110, 941160, 941390 → 949110 |
+| `POST /catalog/products` (JSON), SQLi en `name` | 403 | `ARGS:json.name` | 942100 → 949110 |
+| `POST /catalog/products` (JSON), XSS en `name` | 403 | `ARGS:json.name` | 941100, 941110, 941160, 941390 → 949110 |
+
+Se ve el punto clave: el **mismo** XSS disparó las **mismas** reglas 941xxx en el form y en el JSON; lo único que cambió fue el nombre de la variable (`firstName` vs `json.name`). Los IDs y las variables salieron del audit log, no se asumieron.
+
+### El intento de evasión: cambiar el `Content-Type`
+
+Pregunta natural: ¿y si mando el JSON malicioso pero con `Content-Type: text/plain` para que el WAF no lo parsee como JSON? Lo probamos:
+
+- `POST /catalog/products` con payload SQLi y `Content-Type: text/plain` → **403**, pero **no** por la regla de SQLi: cortó la **`920420` — "Request content type is not allowed by policy"**.
+
+O sea, el truco no funciona. El CRS tiene una lista de `Content-Type` permitidos; si mandás uno fuera de esa lista, te bloquea de entrada. Quedan solo dos caminos y los dos están cubiertos:
+
+1. Content-Type conocido (form/JSON) → lo parsea y lo inspecciona (941/942).
+2. Content-Type no permitido → lo frena antes (920420).
+
+No hay forma de "colar" el body sin inspección.
+
+### Resumen
+
+- La 3.3 **no agrega reglas propias**: reusa el CRS, igual que la 3.2.
+- Lo nuevo es el *mecanismo*: buffering en fase 2 + parseo por `Content-Type` → todo a `ARGS_POST` → las mismas reglas 941/942.
+- Bonus de defensa: el intento de evadir cambiando el `Content-Type` lo tapa la `920420`.
