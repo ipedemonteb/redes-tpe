@@ -13,7 +13,8 @@ Registro de avances del TP. Cada entrada dice **qué hicimos**, **por qué**, **
 | 6. Protección 3.1 (paths sensibles + IP) | ✅ |
 | 7. Protección 3.2 (query params: SQLi/XSS) | ✅ |
 | 8. Protección 3.3 (body: form + JSON) | ✅ |
-| 9–10. Protecciones 3.4 a 3.5 | ⏳ |
+| 9. Protección 3.4 (headers + cookie SESSIONID) | ✅ |
+| 10. Protección 3.5 (estructura del request) | ⏳ |
 | 11. HTTPS | ⏳ |
 | 12. Cerrar caminos alternativos | ⏳ |
 | 13. Scripts de tests y demo | ⏳ |
@@ -408,3 +409,34 @@ El SQLi cortó con un solo hit crítico (justo el umbral 5); el XSS acumuló 20 
 
 **Pendiente:**
 - Evidencia "sin WAF" (modo `Off`): correr los mismos POST y confirmar que pasan (y que el `/catalog/products` refleja la SQLi/XSS, que es la vuln controlada del POC).
+
+---
+
+## Paso 9 — Protección 3.4: headers y cookie (SESSIONID)
+
+**Qué hicimos:** dos controles en **fase 1** (solo headers). El primero lo cubre el CRS; el segundo es **regla propia**.
+
+- **User-Agent de scanners (CRS):** la familia `913xxx` detecta `sqlmap`/`nikto`/`nmap`. Sin regla nuestra. Honesto: se evade cambiando el UA; sirve contra escaneo automático.
+- **Cookie SESSIONID (regla propia `10300`/`10301`):** se agregó a `waf/modsec/custom-rules.conf`. Verificado en el código que `SessionIDWebFilter.java` hace `cookie.getValue()` sin validar → un atacante puede fijar `victima-123` o IDs predecibles (IDOR). La `10300` exige formato UUID v4; la `10301` rechaza más de una cookie `SESSIONID` (parameter pollution). Si la cookie no viene, la regla no dispara y la UI crea una nueva.
+
+**Repo:** cambió `waf/modsec/custom-rules.conf` (reglas 10300 + 10301). `deployment.yaml` y `kustomization.yaml` no cambiaron (el volumen/ConfigMap de reglas ya existía del paso 6; Kustomize regeneró el ConfigMap con hash nuevo al cambiar el archivo).
+
+**Verificación en el clúster real** (modo `On`):
+
+| Request | Código | Regla |
+| :-- | :-- | :-- |
+| `-A "sqlmap/1.7.2"` | 403 | `913100` → `949110` |
+| `-b "SESSIONID=victima-123"` a `/cart` | 403 | `10300` (deny directo) |
+| sin cookie a `/cart` | 200 | — (UI crea cookie) |
+| `SESSIONID=<uuid v4 válido>` a `/cart` | 200 | — |
+| `-A "Mozilla/5.0"` | 200 | — |
+
+**Concepto nuevo:** el scanner lo bloquea la `949110` **por puntaje** (913100 solo suma +5); la cookie la bloquea **nuestra `10300` directo con `deny`** (sin scoring). Reglas propias = decisiones binarias → deny directo; reglas CRS = anomaly scoring.
+
+**Rule IDs confirmados (del log):** 913100, 10300, 949110.
+
+**Explicación completa:** sección 10 de [explicaciones.md](explicaciones.md#10-headers-y-cookie-scanner--sessionid-34).
+
+**Pendiente:**
+- Evidencia "sin WAF" (modo `Off`) de los dos ataques.
+- Probar la `10301` explícitamente (mandar dos cookies `SESSIONID`).

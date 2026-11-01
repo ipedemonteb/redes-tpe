@@ -13,6 +13,7 @@ Apuntes para **repasar y defender** el TP. Mientras implementamos las proteccion
 7. [Anatomía de una regla: la `10100` (3.1)](#7-anatomía-de-una-regla-la-10100-31)
 8. [Query params: cuando NO escribimos regla (3.2)](#8-query-params-cuando-no-escribimos-regla-32)
 9. [Body: buffering, parseo y `ARGS_POST` (3.3)](#9-body-buffering-parseo-y-args_post-33)
+10. [Headers y cookie: scanner + SESSIONID (3.4)](#10-headers-y-cookie-scanner--sessionid-34)
 
 ---
 
@@ -405,3 +406,60 @@ No hay forma de "colar" el body sin inspección.
 - La 3.3 **no agrega reglas propias**: reusa el CRS, igual que la 3.2.
 - Lo nuevo es el *mecanismo*: buffering en fase 2 + parseo por `Content-Type` → todo a `ARGS_POST` → las mismas reglas 941/942.
 - Bonus de defensa: el intento de evadir cambiando el `Content-Type` lo tapa la `920420`.
+
+---
+
+## 10. Headers y cookie: scanner + SESSIONID (3.4)
+
+La 3.4 mezcla los dos mundos en un mismo paso: una parte la cubre el CRS (User-Agent) y la otra es **regla propia** (la cookie). Todo en **fase 1**, porque solo mira headers (no hace falta bufferizar el body).
+
+### Parte CRS: User-Agent de scanners (familia 913)
+
+Herramientas como `sqlmap`, `nikto` o `nmap` se delatan con un User-Agent característico. La familia **913xxx** del CRS los reconoce. Son reglas **críticas**: con un solo match ya suman +5 y la `949110` bloquea.
+
+- Medido: `curl -A "sqlmap/1.7.2" http://localhost/` → **403**, por `913100` ("Found User-Agent associated with security scanner") → `949110`.
+- **Hay que ser honestos en la defensa:** esto se evade cambiando el User-Agent (`-A "Mozilla/5.0"` pasa). Sirve contra escaneo automático, no contra alguien que sabe lo que hace. No es una defensa fuerte, es *ruido fuera*.
+
+### Parte propia: formato de la cookie `SESSIONID`
+
+Acá sí escribimos regla, por la misma razón que en 3.1: es **lógica nuestra que el CRS no conoce**.
+
+El problema (verificado en el código): `SessionIDWebFilter.java` hace `sessionId = cookie.getValue()` **sin validar nada**. Si no viene cookie, crea una (un UUID v4). Pero si viene, acepta cualquier cosa. Entonces un atacante puede fijar `SESSIONID=victima-123`, o probar `1`, `2`, `3`…, y caer en la sesión de otro (IDOR) por el flujo normal, sin pasar por `/proxy`.
+
+La defensa: exigir que la cookie **tenga formato UUID v4**. Si no lo cumple, 403.
+
+```apache
+SecRule REQUEST_COOKIES:SESSIONID "!@rx ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" \
+    "id:10300,phase:1,deny,status:403,log,t:none,t:lowercase,msg:'SESSIONID con formato invalido (se espera UUID v4)'"
+
+SecRule &REQUEST_COOKIES:SESSIONID "@gt 1" \
+    "id:10301,phase:1,deny,status:403,log,msg:'Mas de una cookie SESSIONID'"
+```
+
+Dos detalles de la regla:
+
+- **`REQUEST_COOKIES:SESSIONID`** = el *valor* de esa cookie. El `!@rx` (negado) dispara cuando el valor **no** matchea el patrón UUID v4. El patrón fija el `4` de la versión y el `[89ab]` del variant, que es lo que distingue un UUID v4 real.
+- **`&REQUEST_COOKIES:SESSIONID`** (con `&`) = *cuántas* cookies con ese nombre vinieron. `@gt 1` → mandar dos `SESSIONID` para confundir el parseo (HTTP parameter pollution) también da 403.
+
+**Clave:** si la cookie **no viene** (primera visita), `@rx` no tiene qué evaluar y la regla no dispara → la UI crea una nueva. Justo lo que queremos: no rompemos al usuario nuevo.
+
+**Honestidad, otra vez:** esto frena IDs truchos o adivinados, **no** el robo de un UUID válido (si te roban una sesión real, el formato es correcto).
+
+### Lo que medimos en el clúster real (modo `On`)
+
+| Request | Código | Regla |
+| :-- | :-- | :-- |
+| `-A "sqlmap/1.7.2"` | 403 | `913100` → `949110` |
+| `-b "SESSIONID=victima-123"` a `/cart` | 403 | **`10300`** (deny directo) |
+| sin cookie a `/cart` | 200 | — (la UI crea la cookie) |
+| `-b "SESSIONID=<uuid v4 válido>"` a `/cart` | 200 | — |
+| `-A "Mozilla/5.0"` | 200 | — |
+
+### El concepto nuevo: `deny` directo vs anomaly scoring
+
+Mirando el log se ve una diferencia entre las dos partes:
+
+- El **scanner** lo bloquea la `949110` **por puntaje** (la 913100 solo suma +5). Es el mecanismo del CRS.
+- La **cookie** la bloquea **nuestra `10300` directamente**: no suma puntos ni espera a la 949110, porque la acción es `deny`. Corta en el acto.
+
+Por qué la diferencia: las reglas del CRS usan scoring para poder combinar muchas señales débiles y decidir con el total (menos falsos positivos). Nuestras reglas (`10100`, `10300`, `10301`) son decisiones binarias y claras ("este path/esta cookie no corresponde") → `deny` directo, sin scoring.
