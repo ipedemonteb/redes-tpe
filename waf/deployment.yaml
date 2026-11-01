@@ -24,6 +24,14 @@ spec:
               value: "http://ui.the-store.svc.cluster.local"
             - name: MODSEC_RULE_ENGINE
               value: "Off"
+            # 3.5 Estructura del request: límite de tamaño del body (no-files).
+            # 128 KB. Si se supera, ModSecurity marca REQBODY_ERROR y nuestra
+            # regla 10400 responde 413. Lo fijamos explícitamente para no
+            # depender del default de la imagen. El Ingress corta aparte en 1 MB.
+            - name: MODSEC_REQ_BODY_NOFILES_LIMIT
+              value: "131072"
+            - name: MODSEC_REQ_BODY_LIMIT_ACTION
+              value: "Reject"
             # Audit log
             # On = todas las transacciones (RelevantOnly sería solo las sospechosas).
             - name: MODSEC_AUDIT_ENGINE

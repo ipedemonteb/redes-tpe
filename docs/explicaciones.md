@@ -14,6 +14,7 @@ Apuntes para **repasar y defender** el TP. Mientras implementamos las proteccion
 8. [Query params: cuando NO escribimos regla (3.2)](#8-query-params-cuando-no-escribimos-regla-32)
 9. [Body: buffering, parseo y `ARGS_POST` (3.3)](#9-body-buffering-parseo-y-args_post-33)
 10. [Headers y cookie: scanner + SESSIONID (3.4)](#10-headers-y-cookie-scanner--sessionid-34)
+11. [Estructura del request: 400 y 413 (3.5)](#11-estructura-del-request-400-y-413-35)
 
 ---
 
@@ -463,3 +464,81 @@ Mirando el log se ve una diferencia entre las dos partes:
 - La **cookie** la bloquea **nuestra `10300` directamente**: no suma puntos ni espera a la 949110, porque la acción es `deny`. Corta en el acto.
 
 Por qué la diferencia: las reglas del CRS usan scoring para poder combinar muchas señales débiles y decidir con el total (menos falsos positivos). Nuestras reglas (`10100`, `10300`, `10301`) son decisiones binarias y claras ("este path/esta cookie no corresponde") → `deny` directo, sin scoring.
+
+---
+
+## 11. Estructura del request: 400 y 413 (3.5)
+
+Las protecciones 3.1 a 3.4 son **modelo negativo**: buscan patrones de ataque conocidos (SQLi, XSS, scanners…). La 3.5 es **modelo positivo**: no busca un ataque, exige que el request **tenga la forma esperada**. Son propiedades de protocolo que achican la superficie de ataque. Dos controles:
+
+1. **JSON bien formado** → si no parsea, `400`.
+2. **Tamaño del body** → si se pasa del límite, `413`.
+
+### Cómo decide ModSecurity (la variable `REQBODY_ERROR`)
+
+Al procesar el body en **fase 2**, ModSecurity setea una variable `REQBODY_ERROR = 1` si algo salió mal, y pone el detalle en `REQBODY_ERROR_MSG`. Dos cosas disparan ese error:
+
+- JSON mal formado → `REQBODY_ERROR_MSG = "JSON parsing error: ..."`.
+- Body más grande que `SecRequestBodyNoFilesLimit` → `REQBODY_ERROR_MSG = "Request body excluding files is bigger than the maximum expected."`.
+
+### El problema con la config base
+
+La imagen trae una regla base, la **`200002`**, que hace:
+
+```apache
+SecRule REQBODY_ERROR "!@eq 0" "id:200002,phase:2,deny,status:400,..."
+```
+
+O sea, **cualquier** `REQBODY_ERROR` → `400`. Lo comprobamos: un body de 500 KB daba **400**, no 413. La consigna pide `413` para "body demasiado grande", así que la config base **no alcanza**: mete "JSON roto" y "body grande" en la misma bolsa.
+
+### Lo que hicimos: partir la 200002 en dos
+
+Reemplazamos la regla base por dos propias, distinguiendo según el mensaje de error:
+
+```apache
+SecRuleRemoveById 200002
+
+# Body demasiado grande -> 413
+SecRule REQBODY_ERROR "!@eq 0" \
+    "id:10400,phase:2,deny,status:413,log,t:none,msg:'...',chain"
+    SecRule REQBODY_ERROR_MSG "@rx bigger than the maximum"
+
+# Cualquier otro error de parseo (JSON roto, etc.) -> 400
+SecRule REQBODY_ERROR "!@eq 0" \
+    "id:10401,phase:2,deny,status:400,log,t:none,msg:'...'"
+```
+
+- **`SecRuleRemoveById 200002`**: desactiva la regla base. Esto funciona porque nuestro archivo (`zzz-custom-rules.conf`) se carga **después** de `modsecurity.conf` (donde vive la 200002), así que la puede quitar.
+- **`10400`** (chain): dispara solo si hay error **y** el mensaje contiene "bigger than the maximum" → `413`. Es el caso "body grande".
+- **`10401`**: si hay error pero no es por tamaño (ej: JSON roto) → `400`. Como la `10400` ya cortó el caso de tamaño con su `deny`, acá solo caen los demás.
+
+### El límite y las dos capas de NGINX
+
+El tamaño lo fija `SecRequestBodyNoFilesLimit` (para JSON y urlencoded). Lo declaramos **explícito** en `deployment.yaml`:
+
+```yaml
+- name: MODSEC_REQ_BODY_NOFILES_LIMIT
+  value: "131072"            # 128 KB
+- name: MODSEC_REQ_BODY_LIMIT_ACTION
+  value: "Reject"
+```
+
+Detalle importante: hay **dos NGINX** en el camino y los dos tienen límite de body.
+
+- El **WAF** corta a 128 KB → `413` por nuestra `10400`.
+- El **Ingress** corta a 1 MB (su `client_max_body_size` default) → `413`, pero **antes** de llegar al WAF.
+
+Por eso el payload de prueba es de 500 KB: pasa el Ingress (1 MB) pero no el WAF (128 KB), así el `413` lo da **el WAF**. La pregunta "si mando 2 MB, ¿quién devuelve el 413?" se contesta mirando el log: a 2 MB **no aparece nada en el audit log del WAF**, porque lo frenó el Ingress; a 500 KB sí aparece la `10400`.
+
+### Lo que medimos en el clúster real (modo `On`)
+
+| Request | Código | Quién / regla |
+| :-- | :-- | :-- |
+| JSON roto `{"name":"hola",}` | 400 | WAF, `10401` |
+| body 500 KB | 413 | WAF, `10400` |
+| body 2 MB | 413 | Ingress (no llega al WAF) |
+| JSON válido y chico | 200 | — |
+
+### Por qué 400/413 y no un simple "deny 403"
+
+Los códigos importan: `400` le dice al cliente "tu request está mal formado", `413` dice "es demasiado grande". Son respuestas honestas de protocolo, no "te detecté un ataque" (`403`). Encaja con la idea de modelo positivo: no estamos acusando de ataque, estamos exigiendo forma válida.

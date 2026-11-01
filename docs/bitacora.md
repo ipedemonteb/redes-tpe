@@ -14,7 +14,7 @@ Registro de avances del TP. Cada entrada dice **qué hicimos**, **por qué**, **
 | 7. Protección 3.2 (query params: SQLi/XSS) | ✅ |
 | 8. Protección 3.3 (body: form + JSON) | ✅ |
 | 9. Protección 3.4 (headers + cookie SESSIONID) | ✅ |
-| 10. Protección 3.5 (estructura del request) | ⏳ |
+| 10. Protección 3.5 (estructura del request) | ✅ |
 | 11. HTTPS | ⏳ |
 | 12. Cerrar caminos alternativos | ⏳ |
 | 13. Scripts de tests y demo | ⏳ |
@@ -440,3 +440,42 @@ El SQLi cortó con un solo hit crítico (justo el umbral 5); el XSS acumuló 20 
 **Pendiente:**
 - Evidencia "sin WAF" (modo `Off`) de los dos ataques.
 - Probar la `10301` explícitamente (mandar dos cookies `SESSIONID`).
+
+---
+
+## Paso 10 — Protección 3.5: estructura del request (400 / 413)
+
+**Qué hicimos:** validación de **forma** del request (modelo positivo), en fase 2:
+- JSON mal formado → `400`.
+- Body que supera el límite → `413`.
+
+**Hallazgo clave (no trivial):** la pre-entrega asume que "body grande" devuelve `413` del WAF, pero con la **config base de la imagen eso NO pasa**: la regla base `200002` convierte **cualquier** `REQBODY_ERROR` (JSON roto *o* body grande) en `400`. Lo verificamos: 500 KB daba 400, no 413.
+
+**Decisión (acordada):** cumplir la consigna al pie de la letra con reglas propias. Reemplazamos la `200002`:
+- `SecRuleRemoveById 200002` (se puede porque nuestro archivo carga después de `modsecurity.conf`).
+- `10400` (chain): `REQBODY_ERROR` + mensaje "bigger than the maximum" → `413`.
+- `10401`: cualquier otro `REQBODY_ERROR` (JSON roto) → `400`.
+
+**Repo:**
+- `waf/modsec/custom-rules.conf`: reglas `10400`/`10401` + `SecRuleRemoveById 200002`.
+- `waf/deployment.yaml`: se fijó explícito `MODSEC_REQ_BODY_NOFILES_LIMIT=131072` (128 KB) y `MODSEC_REQ_BODY_LIMIT_ACTION=Reject` (coinciden con el default de la imagen, pero quedan declarados).
+
+**Dos capas de NGINX:** el WAF corta a 128 KB (→ 413 por `10400`); el Ingress corta a 1 MB (→ 413, pero antes de llegar al WAF). Por eso el payload de prueba es de 500 KB: pasa el Ingress pero no el WAF, así el 413 lo da el WAF. A 2 MB lo frena el Ingress (no aparece en el audit log del WAF).
+
+**Verificación en el clúster real** (modo `On`):
+
+| Request | Código | Quién / regla |
+| :-- | :-- | :-- |
+| JSON roto `{"name":"hola",}` | 400 | WAF `10401` |
+| body 500 KB | 413 | WAF `10400` |
+| body 2 MB | 413 | Ingress (no llega al WAF) |
+| JSON válido y chico | 200 | — |
+
+**Rule IDs confirmados (del log):** 10400 (413), 10401 (400).
+
+**Explicación completa:** sección 11 de [explicaciones.md](explicaciones.md#11-estructura-del-request-400-y-413-35).
+
+**Con esto quedan hechas las 5 protecciones (3.1 a 3.5).**
+
+**Pendiente:**
+- Evidencia "sin WAF" (modo `Off`) de los casos 400/413.
