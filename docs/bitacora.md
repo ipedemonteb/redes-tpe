@@ -479,3 +479,22 @@ El SQLi cortó con un solo hit crítico (justo el umbral 5); el XSS acumuló 20 
 
 **Pendiente:**
 - Evidencia "sin WAF" (modo `Off`) de los casos 400/413.
+
+---
+
+## Logging / auditoría — visor `scripts/waf-logs.sh` (adelanto del paso 13)
+
+**Contexto:** la pre-entrega (párrafo de "Diseño de la solución") promete *"logs estructurados de cada transacción analizada para proveer una posibilidad de auditoría"*. Eso **ya está implementado** desde el paso 5: el WAF emite el audit log en JSON a stdout (`MODSEC_AUDIT_ENGINE=On` → todas las transacciones; `MODSEC_AUDIT_LOG_FORMAT=JSON` → estructurado; `MODSEC_AUDIT_LOG=/dev/stdout`). No faltaba implementar nada; faltaba una forma legible de **mostrarlo** en la demo.
+
+**Qué hicimos:** `scripts/waf-logs.sh`, que parsea ese JSON con `jq` y muestra una línea por transacción:
+```
+HH:MM:SS  client_ip  METHOD /uri  CODE  [reglas]  mensaje
+```
+- Sin argumentos: sigue el log en vivo (`tail -f`).
+- `-n N`: últimas N transacciones y sale.
+- `--blocked`: solo las bloqueadas (código >= 400).
+- Colorea por código (200 verde, >=400 rojo).
+
+**Verificado:** modo `-n`, `--blocked` y modo en vivo (aparecen los eventos en tiempo real). Saca bien IP, método, URI, código y los Rule IDs que saltaron (p. ej. `[942100,949110]`, `[10300]`, `[10401]`).
+
+**Pendiente (resto del paso 13):** `scripts/test-waf.sh` (tabla de requests con código esperado 200/403/400/413 y ✅/❌) y `scripts/demo.sh` (guion con pausas).

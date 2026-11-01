@@ -15,6 +15,7 @@ Apuntes para **repasar y defender** el TP. Mientras implementamos las proteccion
 9. [Body: buffering, parseo y `ARGS_POST` (3.3)](#9-body-buffering-parseo-y-args_post-33)
 10. [Headers y cookie: scanner + SESSIONID (3.4)](#10-headers-y-cookie-scanner--sessionid-34)
 11. [Estructura del request: 400 y 413 (3.5)](#11-estructura-del-request-400-y-413-35)
+12. [Logging y auditoría: cómo se leen los logs](#12-logging-y-auditoría-cómo-se-leen-los-logs)
 
 ---
 
@@ -542,3 +543,69 @@ Por eso el payload de prueba es de 500 KB: pasa el Ingress (1 MB) pero no el WAF
 ### Por qué 400/413 y no un simple "deny 403"
 
 Los códigos importan: `400` le dice al cliente "tu request está mal formado", `413` dice "es demasiado grande". Son respuestas honestas de protocolo, no "te detecté un ataque" (`403`). Encaja con la idea de modelo positivo: no estamos acusando de ataque, estamos exigiendo forma válida.
+
+---
+
+## 12. Logging y auditoría: cómo se leen los logs
+
+La pre-entrega promete *"logs estructurados de cada transacción analizada para proveer una posibilidad de auditoría"*. Esta sección explica qué se implementó, **cómo** se accede a esos logs y por qué el método elegido es correcto para la POC (y dónde está su límite).
+
+### Qué genera el WAF
+
+Desde el paso 5, el WAF está configurado (en `deployment.yaml`) para emitir un **audit log estructurado**:
+
+```yaml
+- name: MODSEC_AUDIT_ENGINE
+  value: "On"          # registra TODAS las transacciones (no solo las bloqueadas)
+- name: MODSEC_AUDIT_LOG_FORMAT
+  value: "JSON"        # estructurado (una línea JSON por transacción)
+- name: MODSEC_AUDIT_LOG
+  value: "/dev/stdout" # no lo guarda en archivo: lo imprime por salida estándar
+```
+
+De ahí sale, por cada request, el `client_ip`, el `uri`, el `http_code` y los `ruleId` que saltaron. Es lo que leímos en cada paso para verificar las reglas.
+
+### Cómo se leen: el stdout del contenedor
+
+La clave es `MODSEC_AUDIT_LOG=/dev/stdout`: el WAF **no guarda** el log en un archivo dentro del pod, lo manda a **stdout**. En Kubernetes, el stdout de un contenedor lo captura el runtime y se lee con `kubectl logs`. Por eso el visor `scripts/waf-logs.sh` no entra al pod ni monta volúmenes: le pide el stdout a Kubernetes.
+
+La cadena del visor es un pipe de 4 etapas:
+
+```bash
+kubectl logs -f deploy/waf -n edge-security \   # 1. trae el stdout del contenedor
+  | grep '^{"transaction"' \                     # 2. filtra solo las líneas de audit JSON
+  | jq -rc "$JQ_PROG" \                           # 3. parsea cada JSON -> fila legible
+  | format                                        # 4. colorea e imprime alineado
+```
+
+El stdout viene **mezclado** (access log de nginx + error log + audit JSON de ModSecurity); el `grep '^{"transaction"'` se queda solo con las líneas de auditoría, que son objetos JSON que empiezan con `{"transaction"`.
+
+### ¿Es seguro acceder así?
+
+Hay que separar dos sentidos de "seguro":
+
+**Acceso / permisos → sí.** `kubectl logs` es el mecanismo estándar y previsto de Kubernetes. Va contra el API server, autenticado y autorizado por **RBAC** con el `kubeconfig` del operador. Es **solo lectura**: no modifica el WAF, no entra al pod, no abre puertos. El script no agrega superficie de ataque.
+
+- Matiz: el audit log contiene el **contenido de los requests** (headers, cookies, body). Quien pueda leer los logs ve esos datos — pero eso es inherente a *auditar* tráfico, no al método de acceso. En producción ese log es sensible y su lectura se restringe.
+
+**Confiabilidad / durabilidad → no, y es la limitación real.** El stdout de un contenedor es **efímero**:
+- Si el pod se reinicia o se reemplaza (los nuestros rotan en cada `kubectl apply`), los logs viejos **se pierden**.
+- El kubelet rota los archivos de log por tamaño: aun sin reinicio, los más viejos se descartan.
+- No es buscable históricamente.
+- Con **2 réplicas** (paso 12), `kubectl logs deploy/waf` lee **un solo pod** → te perdés los eventos del otro.
+
+Conclusión: `kubectl logs` es perfecto para **demostrar** la auditoría en vivo, pero no para **retenerla**.
+
+### La alternativa "correcta" y por qué no se hace acá
+
+El patrón productivo es no leer stdout a mano, sino enviarlo a un **agregador de logs** que lo persista y lo haga buscable: **EFK/ELK** (Fluent Bit → Elasticsearch → Kibana) o **Loki + Grafana**. Un colector junta el stdout de todos los pods y lo guarda central.
+
+No se implementa en este TP por dos razones:
+1. **Fuera de scope:** el tema es el WAF. "Gestión Centralizada de Logs (EFK)" y "Observabilidad (Loki/Grafana)" son **otros dos temas** del mismo TPE.
+2. La pre-entrega promete *generar* logs estructurados con posibilidad de auditoría — y eso se cumple. No promete persistencia ni dashboard.
+
+**Para la defensa oral:** decir que los logs se emiten estructurados (JSON) a stdout y que la retención/centralización (EFK, Loki) se deja fuera del scope por ser otro módulo de la arquitectura; acá se demuestra la **generación y el formato** de auditoría. Muestra que se conoce el límite de la decisión.
+
+### Nota para el paso 12 (2 réplicas)
+
+Cuando el WAF pase a 2 réplicas, `scripts/waf-logs.sh` debería leer de **todos** los pods (selector por label `-l app=waf --prefix`), no de `deploy/waf` (que resuelve a un solo pod). Pendiente para ese paso.
