@@ -447,6 +447,41 @@ Dos detalles de la regla:
 
 **Honestidad, otra vez:** esto frena IDs truchos o adivinados, **no** el robo de un UUID válido (si te roban una sesión real, el formato es correcto).
 
+### Parte propia (agregada después): header `X-Forwarded-Prefix`
+
+Lo encontramos revisando qué *otros* headers lee la app, más allá de la cookie. La UI tiene en `application.yml`:
+
+```yaml
+server:
+  forward-headers-strategy: NATIVE
+```
+
+Eso le dice a Spring "confiá en los headers `X-Forwarded-*` que te mande el proxy". Uno de ellos, **`X-Forwarded-Prefix`**, Spring lo usa como prefijo para armar **todas las URLs que genera**: el `Location` de los redirects y los links del HTML (`@{/catalog}` de Thymeleaf). El problema: ni el Ingress ni el WAF lo agregan, así que el valor que llega es **el que mandó el cliente**.
+
+Medido sin WAF:
+
+```bash
+curl -s -i -X POST -b "SESSIONID=<uuid>" -d "productId=...&quantity=1" \
+     -H "X-Forwarded-Prefix: //evil.com" http://localhost/cart
+# → 303  Location: //evil.com/cart      (open redirect)
+curl -s -H "X-Forwarded-Prefix: /evil" http://localhost/home
+# → los 14 links del HTML apuntan a /evil/...
+```
+
+El CRS no lo frena (no es un patrón de ataque conocido, es un header "legítimo" mal confiado). Probamos también `Host`, `X-Forwarded-Host`, `Forwarded`, `X-Forwarded-Port` y `X-Forwarded-Proto`: la app **no** los usa para armar URLs (el `Location` sigue siendo `/cart`), así que el único que importa es este.
+
+La defensa: en nuestra arquitectura **nadie legítimo manda ese header**, así que si viene, 403.
+
+```apache
+SecRule &REQUEST_HEADERS:X-Forwarded-Prefix "@gt 0" \
+    "id:10302,phase:1,deny,status:403,log,msg:'Header X-Forwarded-Prefix no permitido'"
+```
+
+- **`&REQUEST_HEADERS:X-Forwarded-Prefix`** (con `&`) = cuántas veces vino el header. `@gt 0` = "vino al menos una vez". Es el mismo truco del `&` que en la `10301`, pero acá no miramos el valor: **la sola presencia** ya es sospechosa.
+- Fase 1 y `deny` directo, igual que el resto de las reglas propias.
+
+**Honestidad:** desde un navegador ajeno esto no se explota (un sitio externo no puede ponerle headers custom a la víctima). Se vuelve grave si algún día hay un **cache/CDN delante**: una respuesta envenenada con el redirect a `evil.com` le llegaría a todos (*web cache poisoning*). La corrección de fondo es en la app (`forward-headers-strategy: none` o que el proxy pise el header); el WAF lo mitiga en el borde.
+
 ### Lo que medimos en el clúster real (modo `On`)
 
 | Request | Código | Regla |
@@ -456,6 +491,8 @@ Dos detalles de la regla:
 | sin cookie a `/cart` | 200 | — (la UI crea la cookie) |
 | `-b "SESSIONID=<uuid v4 válido>"` a `/cart` | 200 | — |
 | `-A "Mozilla/5.0"` | 200 | — |
+| `-H "X-Forwarded-Prefix: //evil.com"` a `POST /cart` | 403 (sin WAF: 303 a `//evil.com/cart`) | **`10302`** (deny directo) |
+| `POST /cart` legítimo, sin el header | 303 a `/cart` | — |
 
 ### El concepto nuevo: `deny` directo vs anomaly scoring
 
@@ -464,7 +501,7 @@ Mirando el log se ve una diferencia entre las dos partes:
 - El **scanner** lo bloquea la `949110` **por puntaje** (la 913100 solo suma +5). Es el mecanismo del CRS.
 - La **cookie** la bloquea **nuestra `10300` directamente**: no suma puntos ni espera a la 949110, porque la acción es `deny`. Corta en el acto.
 
-Por qué la diferencia: las reglas del CRS usan scoring para poder combinar muchas señales débiles y decidir con el total (menos falsos positivos). Nuestras reglas (`10100`, `10300`, `10301`) son decisiones binarias y claras ("este path/esta cookie no corresponde") → `deny` directo, sin scoring.
+Por qué la diferencia: las reglas del CRS usan scoring para poder combinar muchas señales débiles y decidir con el total (menos falsos positivos). Nuestras reglas (`10100`, `10300`, `10301`, `10302`) son decisiones binarias y claras ("este path/esta cookie/este header no corresponde") → `deny` directo, sin scoring.
 
 ---
 

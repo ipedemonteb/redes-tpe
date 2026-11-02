@@ -528,3 +528,32 @@ Hicimos la prueba que pide el plan: borrar el clúster y levantar todo de nuevo.
 4. `./scripts/test-waf.sh` → **21/21 ✅**; `./scripts/waf-logs.sh -n 40 --blocked` mostró los 13 bloqueos con sus Rule IDs reales.
 
 **Confirmado que NO es un comando solo:** hoy el WAF se aplica a mano después del `local.sh` (pendiente: integrarlo). La IP de cliente pasó a `172.19.0.1` (bridge de Docker nuevo); la regla 10100 usa `REMOTE_ADDR` sobre `10.244.0.0/16`, así que no se vio afectada.
+
+## 2026-11-02 — Refuerzo 3.4: header `X-Forwarded-Prefix` (regla 10302)
+
+**Por qué:** revisando la robustez de la defensa más allá de los casos de la demo, buscamos qué *otros* headers lee la app además de la cookie. La UI tiene `server.forward-headers-strategy: NATIVE`, así que le cree a `X-Forwarded-Prefix` para armar los `Location` y los links del HTML. Ni el Ingress ni el WAF lo agregan → el valor lo controla el cliente, y el CRS no lo frena.
+
+**Evidencia sin WAF (modo `Off`):**
+- `POST /cart` con `-H "X-Forwarded-Prefix: //evil.com"` → **303 `Location: //evil.com/cart`** (open redirect).
+- `GET /home` con `-H "X-Forwarded-Prefix: /evil"` → los 14 links del HTML apuntan a `/evil/...`.
+- Descartados (la app no los usa para armar URLs, `Location` sigue en `/cart`): `Host`, `X-Forwarded-Host`, `Forwarded`, `X-Forwarded-Port`, `X-Forwarded-Proto`.
+
+**Qué hicimos:** regla propia `10302` en `waf/modsec/custom-rules.conf` (bloque 3.4, después de la 10301): fase 1, `&REQUEST_HEADERS:X-Forwarded-Prefix "@gt 0"` → `deny` 403. Nadie legítimo manda ese header en esta arquitectura, así que basta con su presencia. Se sumó el caso a `scripts/test-waf.sh`.
+
+**Repo:** cambiaron `waf/modsec/custom-rules.conf` (regla 10302) y `scripts/test-waf.sh` (1 caso nuevo). Aplicado con `kubectl apply -k waf/` (Kustomize regeneró el ConfigMap con hash nuevo y reinició el pod).
+
+**Verificación en el clúster real** (modo `On`):
+
+| Request | Código | Regla |
+| :-- | :-- | :-- |
+| `POST /cart` con `X-Forwarded-Prefix: //evil.com` | 403 (sin WAF: 303 a `//evil.com/cart`) | `10302` |
+| `GET /home` con `X-Forwarded-Prefix: //evil.com` | 403 | `10302` (confirmado en el log) |
+| `POST /cart` legítimo | 303 a `/cart` | — |
+
+`./scripts/test-waf.sh` → **22/22 ✅**.
+
+**Ojo:** `kubectl apply -k waf/` deja el motor en `Off` (es lo que dice el `deployment.yaml`); hay que volver a correr `./scripts/waf.sh mode on`.
+
+**Honesto:** desde un navegador ajeno no se explota (un sitio externo no le puede poner headers a la víctima); el riesgo real es *web cache poisoning* si se agrega un cache/CDN delante. La corrección de fondo es en la app (`forward-headers-strategy: none`).
+
+**Explicación completa:** sección 10 de [explicaciones.md](explicaciones.md#parte-propia-agregada-después-header-x-forwarded-prefix).

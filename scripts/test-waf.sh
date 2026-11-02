@@ -108,6 +108,8 @@ check "SESSIONID sin formato UUID (regla 10300)" 403 \
 check "Dos cookies SESSIONID (regla 10301)"     403 \
     -H "Cookie: SESSIONID=11111111-1111-4111-8111-111111111111; SESSIONID=22222222-2222-4222-8222-222222222222" \
     "$BASE_URL/cart"
+check "Header X-Forwarded-Prefix (regla 10302)" 403 \
+    -H "X-Forwarded-Prefix: //evil.com" "$BASE_URL/home"
 
 # --- 3.5 Estructura del request: 400 y 413 (reglas propias) ------------------
 section "3.5 Estructura del request (reglas propias 10400/10401)"
