@@ -7,8 +7,10 @@ metadata:
     kubernetes.io/ingress.class: nginx
 spec:
   rules:
-    - host: "localhost"
-      http:
+    # Sin "host": el ingress atiende cualquier Host (localhost, IP de LAN/VPN, etc.).
+    # Filtrar por Host no es un control de seguridad (el cliente lo controla); la
+    # proteccion es ModSecurity. Dejarlo abierto permite acceso remoto directo.
+    - http:
         paths:
           - path: /
             pathType: Prefix

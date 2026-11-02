@@ -15,9 +15,9 @@ Registro de avances del TP. Cada entrada dice **qué hicimos**, **por qué**, **
 | 8. Protección 3.3 (body: form + JSON) | ✅ |
 | 9. Protección 3.4 (headers + cookie SESSIONID) | ✅ |
 | 10. Protección 3.5 (estructura del request) | ✅ |
-| 11. HTTPS | ⏳ |
-| 12. Cerrar caminos alternativos | ⏳ |
-| 13. Scripts de tests y demo | ⏳ |
+| 11. HTTPS | 🔎 a analizar |
+| 12. Cerrar caminos alternativos | 🔎 a analizar |
+| 13. Scripts de tests y demo | 🔄 en curso (`test-waf.sh` ✅, `waf-logs.sh` ✅; falta `demo.sh` y sumar WAF a `local.sh`) |
 | 14. How-to, PPT y ensayo | ⏳ |
 
 ### Prender y apagar el clúster
@@ -498,3 +498,33 @@ HH:MM:SS  client_ip  METHOD /uri  CODE  [reglas]  mensaje
 **Verificado:** modo `-n`, `--blocked` y modo en vivo (aparecen los eventos en tiempo real). Saca bien IP, método, URI, código y los Rule IDs que saltaron (p. ej. `[942100,949110]`, `[10300]`, `[10401]`).
 
 **Pendiente (resto del paso 13):** `scripts/test-waf.sh` (tabla de requests con código esperado 200/403/400/413 y ✅/❌) y `scripts/demo.sh` (guion con pausas).
+
+## Paso 13 — Suite de tests `scripts/test-waf.sh`
+
+**Qué es:** el script que *afirma* el resultado esperado de cada protección (los `attacks/*.sh` solo muestran; este verifica). Lista de requests con su código esperado → imprime ✅/❌ y sale con código ≠ 0 si algo falla (sirve para el "levantar de cero y correr todo verde").
+
+**Cobertura (21 casos):**
+- **Legítimo (200):** home, catálogo con tag normal, alta de producto normal, cookie con UUID v4 válido, request sin cookie.
+- **3.1 (403):** `/proxy/orders`, `/actuator/metrics`, `/actuator/health`, IDOR `/proxy/carts/...`, `/utility/health/down`, `/utility/panic` → regla propia 10100.
+- **3.2 (403):** SQLi y XSS en `?tag` → CRS (anomaly scoring).
+- **3.3 (403):** XSS en form urlencoded, SQLi y XSS en JSON → CRS.
+- **3.4 (403):** User-Agent `sqlmap` (CRS 913100), SESSIONID sin formato UUID (10300), dos cookies SESSIONID (10301).
+- **3.5:** JSON mal formado → **400** (10401); body de ~500 KB → **413** (10400).
+
+**Decisiones:**
+- Asegura `MODSEC_RULE_ENGINE=On` antes de correr (si estaba en Off/Detect lo prende con `waf.sh` y lo restaura al salir vía `trap`). Sin eso los ataques darían 200 y el test no significaría nada.
+- El body grande se genera a un archivo temporal y se manda con `--data-binary @archivo`: evita el `Argument list too long` (payload como argv) y el bug de contadores perdidos en subshell de un pipe.
+
+**Verificado:** `./scripts/test-waf.sh` → **21/21 ✅** con el clúster levantado.
+
+**Pendiente del paso 13:** `scripts/demo.sh` (guion con pausas) y sumar el WAF a `local.sh` para que `create-cluster` deje todo protegido.
+
+### Prueba final "desde cero" (2026-11-01)
+
+Hicimos la prueba que pide el plan: borrar el clúster y levantar todo de nuevo.
+1. `./local.sh rebuild-cluster --skip-tests` → clúster kind + ingress-nginx + 5 imágenes + app. (~3 min con cache de Docker).
+2. `kubectl apply -k waf/` → namespace `edge-security`, WAF y el ingress `waf` (único punto de entrada; el manifest del app no trae ingress propio).
+3. `./scripts/waf.sh mode on` (el `deployment.yaml` deja el motor en `Off` por default).
+4. `./scripts/test-waf.sh` → **21/21 ✅**; `./scripts/waf-logs.sh -n 40 --blocked` mostró los 13 bloqueos con sus Rule IDs reales.
+
+**Confirmado que NO es un comando solo:** hoy el WAF se aplica a mano después del `local.sh` (pendiente: integrarlo). La IP de cliente pasó a `172.19.0.1` (bridge de Docker nuevo); la regla 10100 usa `REMOTE_ADDR` sobre `10.244.0.0/16`, así que no se vio afectada.
