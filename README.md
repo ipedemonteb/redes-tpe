@@ -9,6 +9,16 @@ Our platform provides a complete shopping experience with:
 - **Scalable microservices** built with multiple languages and frameworks
 - **Real-time inventory management** and order processing
 
+## TPE: WAF
+
+Este fork agrega un WAF (ModSecurity v3 + OWASP Core Rule Set) en el borde del clúster,
+como TP Especial de Redes de Información (ITBA, 2do cuatrimestre 2026).
+
+- [How-to](./docs/HOWTO.md): cómo levantar, operar y demostrar el WAF.
+- [Explicaciones](./docs/explicaciones.md): el por qué de cada decisión técnica.
+- [Pre-entrega](./docs/pre-entrega.md): el alcance comprometido.
+- [Bitácora](./docs/bitacora.md): el registro del desarrollo.
+
 ## 🏗️ Architecture
 
 The Store is built with a microservices architecture that uses different technologies:
