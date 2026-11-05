@@ -48,7 +48,7 @@ echo -e "${BOLD}${BLUE}── Disparando trafico…${NC}"
 
 # --- Trafico legitimo (200) --------------------------------------------------
 fire "Home de la tienda (legitimo)"                 "$BASE_URL/"
-fire "Catalogo con tag normal (legitimo)"           "$BASE_URL/catalog?tag=shoes"
+fire "Catalogo con tag normal (legitimo)"           "$BASE_URL/catalog?tag=clothing"
 
 # --- Ataques (403) -----------------------------------------------------------
 fire "SQL Injection en ?tag"                         "$BASE_URL/catalog?tag=1'%20OR%20'1'='1"
