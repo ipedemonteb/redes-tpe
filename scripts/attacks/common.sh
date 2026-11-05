@@ -19,6 +19,7 @@ note() {
 
 # attack "descripción" <argumentos de curl...>
 # Ejecuta el request y muestra el comando, el código HTTP y el comienzo del body.
+# Deja el código HTTP en LAST_CODE (vacío si no hubo respuesta) y el body en LAST_BODY.
 attack() {
     local desc="$1"; shift
     echo
@@ -29,6 +30,8 @@ attack() {
     out=$(curl -s -i --max-time 15 "$@" | tr -d '\r')
     status=$(printf '%s\n' "$out" | head -1)
     body=$(printf '%s\n' "$out" | sed '1,/^$/d')
+    LAST_CODE=$(printf '%s\n' "$status" | awk '{print $2}')
+    LAST_BODY="$body"
 
     case "$status" in
         "")              echo -e "  ${RED}sin respuesta (timeout o conexión rechazada)${NC}"; return ;;
