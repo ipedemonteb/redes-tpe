@@ -155,7 +155,7 @@ Fase 1 completada: el clúster está levantado y la tienda funciona en `http://l
 - **`panic` (3.1):** sí apaga el pod; Kubernetes lo reinicia (sube el contador de RESTARTS). DoS real aunque transitorio.
 - **Query params (3.2):** Catalog no es explotable (consulta parametrizada; el `tag` se refleja escapado). El payload igual llega sin filtro → el WAF acá es defensa en profundidad. Lo dejamos dicho con honestidad.
 - **Checkout XSS (3.3):** dos correcciones respecto de la pre-entrega:
-  1. el campo del formulario es **`streetAddress`**, no `address1`;
+  1. ~~el campo del formulario es **`streetAddress`**, no `address1`~~ → **corregido el 2026-11-04:** el campo correcto es **`address1`**, como dice la pre-entrega. El HTML del formulario (`checkout-shipping.html`) usa `name="streetAddress"`, pero el backend de la UI (`ShippingAddressRequest`) bindea `address1`: `streetAddress` se ignora y queda el default `"100 Main Street"`. Es un bug de la app, no del comando. Verificado en el clúster: con `address1=Calle123` checkout guarda `"address1":"Calle123"`;
   2. el `POST /checkout` necesita que la sesión tenga carrito **y** que se haya hecho un `GET /checkout` antes; si no, da 500 sin procesar. Con eso preparado, responde 200 y el `<script>` queda **guardado sin escapar** (se ve en `/proxy/checkout/<sid>`): XSS almacenado confirmado.
 - **Cookie (3.4):** la app acepta `SESSIONID=victima-123` tal cual (no hay `Set-Cookie`); sin cookie, asigna un UUID. Prueba limpia de que no valida el formato.
 - **`/catalog/products` (3.3 y 3.5):** da 405 en los 4 casos porque el endpoint todavía no existe. Se crea en el paso 3 y ahí completamos esa evidencia.
@@ -164,7 +164,7 @@ Fase 1 completada: el clúster está levantado y la tienda funciona en `http://l
 
 > Detalle cosmético: correr el script varias veces acumula ítems repetidos en los carritos de prueba y suma un reinicio por el `panic`. No afecta la demostración; se puede dejar idempotente más adelante.
 
-> Pendiente para el documento final: corregir en la pre-entrega `address1` → `streetAddress` y suavizar el claim de `health/down`.
+> Pendiente para el documento final: suavizar el claim de `health/down`. (El cambio `address1` → `streetAddress` que figuraba acá era incorrecto; ver la corrección del punto 1 de arriba.)
 
 ---
 
