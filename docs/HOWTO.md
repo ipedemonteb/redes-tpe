@@ -1,10 +1,5 @@
 # How-to: implementación del WAF sobre The Store
 
-Guía práctica para levantar, operar y demostrar el WAF del TPE. Es el documento de
-implementación que pide la consigna: acá está el *cómo*. El *por qué* de cada decisión
-técnica está en [`explicaciones.md`](explicaciones.md); el registro del desarrollo, en
-[`bitacora.md`](bitacora.md); el alcance comprometido, en [`pre-entrega.md`](pre-entrega.md).
-
 ## 1. Qué se implementó
 
 The Store es una tienda de microservicios sobre Kubernetes cuyo único punto de entrada es
@@ -103,40 +98,44 @@ sirve para la prueba "levantar de cero y que dé todo verde".
 
 ## 5. Correr la demo
 
-Para la exposición (recorre cada punto del POC, con pausas que controla el orador):
+La demo usa los scripts de `scripts/attacks/`, uno por punto del POC. Cada uno corre los
+comandos de la pre-entrega e imprime el comando, el código HTTP y el comienzo de la
+respuesta. **El mismo script sirve con el WAF apagado o prendido**: no consulta el modo, y
+después de cada request muestra una nota según lo que respondió (si se bloqueó, qué regla
+lo frenó; si pasó, qué vulnerabilidad queda expuesta).
+
+Orden de la exposición:
 
 ```bash
-./scripts/demo.sh                 # demo completa, Enter para avanzar entre puntos
-./scripts/demo.sh --no-pause      # sin pausas, para ensayar y cronometrar
-./scripts/demo.sh --section 3.2   # un solo punto (3.1 | 3.2 | 3.3 | 3.4 | 3.5 | logs)
-./scripts/demo.sh --sin-waf       # muestra, antes de cada punto, el mismo ataque con el WAF apagado
+# 0. Arquitectura
+kubectl get pods -A
+kubectl get ingress -A
+
+# 1 a 5. Cada punto, primero sin WAF y después con WAF
+./scripts/waf.sh mode off
+./scripts/attacks/3.1-paths-ip.sh     # sin WAF: el ataque pasa
+./scripts/waf.sh mode on
+./scripts/attacks/3.1-paths-ip.sh     # con WAF: el ataque se bloquea
+# ... lo mismo con 3.2-query-params, 3.3-body, 3.4-headers y 3.5-estructura
+
+# 6. Logs (el WAF queda prendido)
+./scripts/waf-logs.sh -n 20
 ```
 
-Por cada punto muestra un request legítimo (pasa, 200) y los ataques (bloqueados). No es
-destructivo: el `/utility/panic` se muestra como request bloqueado (inofensivo con el WAF
-en On).
+Cada cambio de modo reemplaza el pod del WAF y borra su audit log: al final solo quedan
+los eventos del último punto. Para correr los cinco de una: `./scripts/attacks/run-all.sh`.
 
-Para la parte de monitoreo sola, hay además una demo específica:
+> Con el WAF en `off`, el `3.1-paths-ip.sh` dispara `/utility/panic`, que tira la UI de
+> verdad, y espera a que Kubernetes la reinicie (~25 s). Con el WAF en `on` el panic se
+> bloquea (403) y el script termina en el acto.
+
+Además hay dos guiones alternativos:
 
 ```bash
+./scripts/demo.sh                 # recorre los 5 puntos con el WAF prendido (legítimo → 200, ataque → bloqueado)
+./scripts/demo.sh --sin-waf       # agrega el ataque con el WAF apagado antes de cada punto
 ./scripts/demo-logs.sh            # dispara un mix de tráfico y muestra el audit log
 ```
-
-### Mostrar los ataques "sin WAF" (el "antes")
-
-Los scripts de `scripts/attacks/` corren los ataques crudos (con el detalle del body y la
-respuesta), pensados para verse con el motor en `off`:
-
-```bash
-./scripts/waf.sh mode off
-./scripts/attacks/run-all.sh          # 3.1 a 3.5 en orden
-./scripts/attacks/3.3-body.sh         # uno solo
-./scripts/waf.sh mode on
-```
-
-> El `3.1-paths-ip.sh` incluye `/utility/panic` y espera a que Kubernetes reinicie la UI
-> (~1-2 min). Corralo solo con el WAF en `off` (es evidencia del "antes"); con el WAF en
-> `on` el panic se bloquea y la espera cuelga.
 
 ## 6. Leer los logs (auditoría)
 
@@ -165,7 +164,7 @@ waf/
 ├── namespace.yaml        # namespace edge-security
 ├── deployment.yaml       # el WAF: imagen owasp/modsecurity-crs, env (modo, límites, audit, realip)
 ├── service.yaml          # ClusterIP 80 → 8080
-├── ingress.yaml          # localhost → Service waf (único punto de entrada)
+├── ingress.yaml          # todo el tráfico (cualquier host) → Service waf (único punto de entrada)
 ├── kustomization.yaml    # arma todo con `kubectl apply -k waf/`; genera los ConfigMap
 ├── nginx/realip.conf     # que el WAF vea la IP real del cliente (X-Real-IP → REMOTE_ADDR)
 └── modsec/custom-rules.conf   # NUESTRAS reglas (IDs 10000-19999): 10100, 10300/01/02, 10400/01
@@ -176,7 +175,7 @@ scripts/
 ├── demo.sh         # guion de la demo (cada punto del POC, con pausas)
 ├── demo-logs.sh    # demo de monitoreo (mix de tráfico + audit log)
 ├── waf-logs.sh     # visor del audit log
-└── attacks/        # ataques crudos por punto (3.1 a 3.5), para el "sin WAF"
+└── attacks/        # un script por punto (3.1 a 3.5), sirve con el WAF apagado o prendido
 ```
 
 La imagen `owasp/modsecurity-crs` trae NGINX + ModSecurity v3 + el CRS completo. Nuestras
