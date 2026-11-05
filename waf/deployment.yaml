@@ -22,8 +22,10 @@ spec:
           env:
             - name: BACKEND
               value: "http://ui.the-store.svc.cluster.local"
+            # Modo del motor. El default es On (fail-closed): cada apply deja el
+            # WAF bloqueando. Para comparar "sin WAF" se usa ./scripts/waf.sh mode off.
             - name: MODSEC_RULE_ENGINE
-              value: "Off"
+              value: "On"
             # 3.5 Estructura del request: límite de tamaño del body (no-files).
             # 128 KB. Si se supera, ModSecurity marca REQBODY_ERROR y nuestra
             # regla 10400 responde 413. Lo fijamos explícitamente para no
